@@ -119,6 +119,7 @@ export class WsTransport {
 
     ws.addEventListener("close", () => {
       this.ws = null;
+      this.rejectPendingRequests("Connection to the T3 Code server was lost.");
       this.scheduleReconnect();
     });
 
@@ -195,6 +196,14 @@ export class WsTransport {
       setTimeout(() => clearInterval(check), REQUEST_TIMEOUT_MS);
     };
     waitForOpen();
+  }
+
+  private rejectPendingRequests(message: string) {
+    for (const [id, pending] of this.pending) {
+      clearTimeout(pending.timeout);
+      pending.reject(new Error(message));
+      this.pending.delete(id);
+    }
   }
 
   private scheduleReconnect() {

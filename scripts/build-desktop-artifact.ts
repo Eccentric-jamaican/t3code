@@ -11,6 +11,12 @@ import serverPackageJson from "../apps/server/package.json" with { type: "json" 
 import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
 
+import {
+  APP_DESKTOP_APP_ID,
+  APP_DESKTOP_ARTIFACT_BASENAME,
+  APP_DESKTOP_UPDATE_REPOSITORY,
+  APP_DESKTOP_STAGE_PACKAGE_NAME,
+} from "@t3tools/shared/branding";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Config, Data, Effect, FileSystem, Layer, Logger, Option, Path, Schema } from "effect";
@@ -426,7 +432,7 @@ function resolveGitHubPublishConfig():
   const rawRepo =
     process.env.T3CODE_DESKTOP_UPDATE_REPOSITORY?.trim() ||
     process.env.GITHUB_REPOSITORY?.trim() ||
-    "";
+    APP_DESKTOP_UPDATE_REPOSITORY;
   if (!rawRepo) return undefined;
 
   const [owner, repo, ...rest] = rawRepo.split("/");
@@ -447,9 +453,11 @@ const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   signed: boolean,
 ) {
   const buildConfig: Record<string, unknown> = {
-    appId: "com.t3tools.t3code",
+    appId: APP_DESKTOP_APP_ID,
     productName,
-    artifactName: "T3-Code-${version}-${arch}.${ext}",
+    artifactName: `${APP_DESKTOP_ARTIFACT_BASENAME}-\${version}-\${arch}.\${ext}`,
+    npmRebuild: false,
+    nodeGypRebuild: false,
     directories: {
       buildResources: "apps/desktop/resources",
     },
@@ -479,6 +487,7 @@ const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     const winConfig: Record<string, unknown> = {
       target: [target],
       icon: "icon.ico",
+      signAndEditExecutable: signed,
     };
     if (signed) {
       winConfig.azureSignOptions = yield* AzureTrustedSigningOptionsConfig;
@@ -611,14 +620,14 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   yield* assertPlatformBuildResources(options.platform, stageResourcesDir, options.verbose);
 
   const stagePackageJson: StagePackageJson = {
-    name: "t3-code-desktop",
+    name: APP_DESKTOP_STAGE_PACKAGE_NAME,
     version: appVersion,
     buildVersion: appVersion,
     t3codeCommitHash: commitHash,
     private: true,
     description: "T3 Code desktop build",
     author: "T3 Tools",
-    main: "apps/desktop/dist-electron/main.js",
+    main: `apps/desktop/${desktopPackageJson.main}`,
     build: yield* createBuildConfig(
       options.platform,
       options.target,

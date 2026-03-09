@@ -16,9 +16,11 @@ import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { APP_DESKTOP_APP_ID, getAppDisplayName } from "@t3tools/shared/branding";
+
 const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
-const APP_DISPLAY_NAME = isDevelopment ? "T3 Code (Dev)" : "T3 Code (Alpha)";
-const APP_BUNDLE_ID = "com.t3tools.t3code";
+const APP_DISPLAY_NAME = getAppDisplayName(isDevelopment);
+const APP_BUNDLE_ID = APP_DESKTOP_APP_ID;
 const LAUNCHER_VERSION = 1;
 
 const __dirname = dirname(fileURLToPath(import.meta.url));

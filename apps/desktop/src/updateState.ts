@@ -33,10 +33,14 @@ export function getAutoUpdateDisabledReason(args: {
   isPackaged: boolean;
   platform: NodeJS.Platform;
   appImage?: string | undefined;
+  disabledByBranding: boolean;
   disabledByEnv: boolean;
 }): string | null {
   if (args.isDevelopment || !args.isPackaged) {
     return "Automatic updates are only available in packaged production builds.";
+  }
+  if (args.disabledByBranding) {
+    return "Automatic updates are disabled for this fork so the official Alpha app remains the maintained update channel.";
   }
   if (args.disabledByEnv) {
     return "Automatic updates are disabled by the T3CODE_DISABLE_AUTO_UPDATE setting.";

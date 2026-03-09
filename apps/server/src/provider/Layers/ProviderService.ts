@@ -436,17 +436,13 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             return session;
           }
 
-          const overrides: {
-            resumeCursor?: ProviderSession["resumeCursor"];
-            runtimeMode?: ProviderSession["runtimeMode"];
-          } = {};
-          if (session.resumeCursor === undefined && binding.resumeCursor !== undefined) {
-            overrides.resumeCursor = binding.resumeCursor;
-          }
-          if (binding.runtimeMode !== undefined) {
-            overrides.runtimeMode = binding.runtimeMode;
-          }
-          return Object.assign({}, session, overrides);
+          return {
+            ...session,
+            ...(session.resumeCursor === undefined && binding.resumeCursor !== undefined
+              ? { resumeCursor: binding.resumeCursor }
+              : {}),
+            ...(binding.runtimeMode !== undefined ? { runtimeMode: binding.runtimeMode } : {}),
+          };
         });
       });
 

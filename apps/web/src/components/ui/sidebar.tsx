@@ -1,7 +1,6 @@
 import { mergeProps } from "@base-ui/react/merge-props";
 import { useRender } from "@base-ui/react/use-render";
 import { cva, type VariantProps } from "class-variance-authority";
-import { PanelLeftCloseIcon, PanelLeftIcon } from "lucide-react";
 import * as React from "react";
 import { cn } from "~/lib/utils";
 import { Button } from "~/components/ui/button";
@@ -263,7 +262,7 @@ function Sidebar({
         {/* This is what handles the sidebar gap on desktop */}
         <div
           className={cn(
-            "relative w-(--sidebar-width) bg-transparent transition-[width] duration-200 ease-linear",
+            "relative w-(--sidebar-width) bg-transparent transition-[width] duration-150 ease-out group-data-[collapsible=offcanvas]:duration-0 motion-reduce:transition-none",
             "group-data-[collapsible=offcanvas]:w-0",
             "group-data-[side=right]:rotate-180",
             variant === "floating" || variant === "inset"
@@ -274,10 +273,10 @@ function Sidebar({
         />
         <div
           className={cn(
-            "fixed inset-y-0 z-10 hidden h-svh w-(--sidebar-width) transition-[left,right,width] duration-200 ease-linear md:flex",
+            "fixed inset-y-0 z-10 hidden h-svh w-(--sidebar-width) transition-transform duration-150 ease-out will-change-transform group-data-[collapsible=offcanvas]:duration-0 motion-reduce:transition-none md:flex",
             side === "left"
-              ? "left-0 group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-1)]"
-              : "right-0 group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-1)]",
+              ? "left-0 group-data-[collapsible=offcanvas]:-translate-x-full"
+              : "right-0 group-data-[collapsible=offcanvas]:translate-x-full",
             // Adjust the padding for floating and inset variants.
             variant === "floating" || variant === "inset"
               ? "p-2 group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)+(--spacing(4))+2px)]"
@@ -301,11 +300,16 @@ function Sidebar({
 }
 
 function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<typeof Button>) {
-  const { toggleSidebar, openMobile } = useSidebar();
+  const { isMobile, open, openMobile, toggleSidebar } = useSidebar();
+  const isExpanded = isMobile ? openMobile : open;
 
   return (
     <Button
-      className={cn("size-7", className)}
+      aria-label={isExpanded ? "Collapse Sidebar" : "Expand Sidebar"}
+      className={cn(
+        "size-8 rounded-lg border border-border/65 bg-background/80 text-foreground shadow-xs backdrop-blur-sm hover:bg-accent/70",
+        className,
+      )}
       data-sidebar="trigger"
       data-slot="sidebar-trigger"
       onClick={(event) => {
@@ -313,12 +317,51 @@ function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<t
         toggleSidebar();
       }}
       size="icon"
-      variant="ghost"
+      title={isExpanded ? "Collapse Sidebar" : "Expand Sidebar"}
+      variant="outline"
       {...props}
     >
-      {openMobile ? <PanelLeftCloseIcon /> : <PanelLeftIcon />}
+      <SidebarDockToggleIcon collapsed={!isExpanded} />
       <span className="sr-only">Toggle Sidebar</span>
     </Button>
+  );
+}
+
+function SidebarDockToggleIcon({
+  className,
+  collapsed = false,
+}: {
+  className?: string;
+  collapsed?: boolean;
+}) {
+  return (
+    <svg
+      aria-hidden="true"
+      className={cn("size-4", className)}
+      fill="none"
+      viewBox="0 0 20 20"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <rect
+        fill="currentColor"
+        fillOpacity="0.04"
+        height="13"
+        rx="3"
+        stroke="currentColor"
+        strokeOpacity="0.9"
+        strokeWidth="1.4"
+        width="13"
+        x="3.5"
+        y="3.5"
+      />
+      <path
+        d={collapsed ? "M12 5.75V14.25" : "M8 5.75V14.25"}
+        opacity="0.95"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeWidth="1.6"
+      />
+    </svg>
   );
 }
 

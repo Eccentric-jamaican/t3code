@@ -9,7 +9,7 @@ function ChatIndexRouteView() {
       {!isElectron && (
         <header className="border-b border-border px-3 py-2 md:hidden">
           <div className="flex items-center gap-2">
-            <SidebarTrigger className="size-7 shrink-0" />
+            <SidebarTrigger className="shrink-0" />
             <span className="text-sm font-medium text-foreground">Threads</span>
           </div>
         </header>

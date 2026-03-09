@@ -12,6 +12,11 @@ import { autoUpdater } from "electron-updater";
 
 import type { ContextMenuItem } from "@t3tools/contracts";
 import { NetService } from "@t3tools/shared/Net";
+import {
+  APP_DESKTOP_APP_ID,
+  APP_DESKTOP_ENABLE_AUTO_UPDATES,
+  getAppDisplayName,
+} from "@t3tools/shared/branding";
 import { RotatingFileSink } from "@t3tools/shared/logging";
 import { showDesktopConfirmDialog } from "./confirmDialog";
 import { fixPath } from "./fixPath";
@@ -31,6 +36,7 @@ import {
   reduceDesktopUpdateStateOnNoUpdate,
   reduceDesktopUpdateStateOnUpdateAvailable,
 } from "./updateMachine";
+import { resolveDesktopStateDir } from "./statePaths";
 
 fixPath();
 
@@ -43,13 +49,14 @@ const UPDATE_STATE_CHANNEL = "desktop:update-state";
 const UPDATE_GET_STATE_CHANNEL = "desktop:update-get-state";
 const UPDATE_DOWNLOAD_CHANNEL = "desktop:update-download";
 const UPDATE_INSTALL_CHANNEL = "desktop:update-install";
-const STATE_DIR =
-  process.env.T3CODE_STATE_DIR?.trim() || Path.join(OS.homedir(), ".t3", "userdata");
+const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
+const APP_DISPLAY_NAME = getAppDisplayName(isDevelopment);
+const STATE_DIR = resolveDesktopStateDir(process.env.T3CODE_STATE_DIR);
+const ELECTRON_USER_DATA_DIR =
+  process.env.T3CODE_ELECTRON_USER_DATA_DIR?.trim() ||
+  Path.join(app.getPath("appData"), APP_DISPLAY_NAME);
 const DESKTOP_SCHEME = "t3";
 const ROOT_DIR = Path.resolve(__dirname, "../../..");
-const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
-const APP_DISPLAY_NAME = isDevelopment ? "T3 Code (Dev)" : "T3 Code (Alpha)";
-const APP_USER_MODEL_ID = "com.t3tools.t3code";
 const COMMIT_HASH_PATTERN = /^[0-9a-f]{7,40}$/i;
 const COMMIT_HASH_DISPLAY_LENGTH = 12;
 const LOG_DIR = Path.join(STATE_DIR, "logs");
@@ -58,8 +65,6 @@ const LOG_FILE_MAX_FILES = 10;
 const APP_RUN_ID = Crypto.randomBytes(6).toString("hex");
 const AUTO_UPDATE_STARTUP_DELAY_MS = 15_000;
 const AUTO_UPDATE_POLL_INTERVAL_MS = 4 * 60 * 60 * 1000;
-const DESKTOP_UPDATE_CHANNEL = "latest";
-const DESKTOP_UPDATE_ALLOW_PRERELEASE = false;
 
 type DesktopUpdateErrorContext = DesktopUpdateState["errorContext"];
 
@@ -79,6 +84,9 @@ let restoreStdIoCapture: (() => void) | null = null;
 
 let destructiveMenuIconCache: Electron.NativeImage | null | undefined;
 const initialUpdateState = (): DesktopUpdateState => createInitialDesktopUpdateState(app.getVersion());
+
+app.setPath("userData", ELECTRON_USER_DATA_DIR);
+app.setPath("sessionData", Path.join(ELECTRON_USER_DATA_DIR, "session"));
 
 function logTimestamp(): string {
   return new Date().toISOString();
@@ -470,6 +478,7 @@ function handleCheckForUpdatesMenuClick(): void {
     isPackaged: app.isPackaged,
     platform: process.platform,
     appImage: process.env.APPIMAGE,
+    disabledByBranding: !APP_DESKTOP_ENABLE_AUTO_UPDATES,
     disabledByEnv: process.env.T3CODE_DISABLE_AUTO_UPDATE === "1",
   });
   if (disabledReason) {
@@ -584,7 +593,7 @@ function configureAppIdentity(): void {
   });
 
   if (process.platform === "win32") {
-    app.setAppUserModelId(APP_USER_MODEL_ID);
+    app.setAppUserModelId(APP_DESKTOP_APP_ID);
   }
 
   if (process.platform === "darwin" && app.dock) {
@@ -625,6 +634,7 @@ function shouldEnableAutoUpdates(): boolean {
       isPackaged: app.isPackaged,
       platform: process.platform,
       appImage: process.env.APPIMAGE,
+      disabledByBranding: !APP_DESKTOP_ENABLE_AUTO_UPDATES,
       disabledByEnv: process.env.T3CODE_DISABLE_AUTO_UPDATE === "1",
     }) === null
   );
@@ -727,10 +737,7 @@ function configureAutoUpdater(): void {
 
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = false;
-  // Keep alpha branding, but force all installs onto the stable update track.
-  autoUpdater.channel = DESKTOP_UPDATE_CHANNEL;
-  autoUpdater.allowPrerelease = DESKTOP_UPDATE_ALLOW_PRERELEASE;
-  autoUpdater.allowDowngrade = false;
+  autoUpdater.allowPrerelease = app.getVersion().includes("-");
   let lastLoggedDownloadMilestone = -1;
 
   autoUpdater.on("checking-for-update", () => {

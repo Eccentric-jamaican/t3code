@@ -3,6 +3,7 @@ import {
   FolderIcon,
   GitPullRequestIcon,
   RocketIcon,
+  SettingsIcon,
   SquarePenIcon,
   TerminalIcon,
 } from "lucide-react";
@@ -17,11 +18,11 @@ import {
   type ResolvedKeybindingsConfig,
 } from "@t3tools/contracts";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate, useParams } from "@tanstack/react-router";
+import { useNavigate, useParams, useRouterState } from "@tanstack/react-router";
 import { useAppSettings } from "../appSettings";
 import { isElectron } from "../env";
 import { APP_STAGE_LABEL } from "../branding";
-import { newCommandId, newProjectId, newThreadId } from "../lib/utils";
+import { cn, newCommandId, newProjectId, newThreadId } from "../lib/utils";
 import { useStore } from "../store";
 import { isChatNewLocalShortcut, isChatNewShortcut, shortcutLabelForCommand } from "../keybindings";
 import { type Thread } from "../types";
@@ -63,6 +64,10 @@ import { isNonEmpty as isNonEmptyString } from "effect/String";
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const THREAD_PREVIEW_LIMIT = 6;
+
+function getErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message.trim().length > 0 ? error.message : fallback;
+}
 
 async function copyTextToClipboard(text: string): Promise<void> {
   if (typeof navigator === "undefined" || navigator.clipboard?.writeText === undefined) {
@@ -278,6 +283,7 @@ export default function Sidebar() {
     (store) => store.clearProjectDraftThreadById,
   );
   const navigate = useNavigate();
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
   const { settings: appSettings } = useAppSettings();
   const routeThreadId = useParams({
     strict: false,
@@ -480,13 +486,22 @@ export default function Sidebar() {
       const cwd = rawCwd.trim();
       if (!cwd || isAddingProject) return;
       const api = readNativeApi();
-      if (!api) return;
+      if (!api) {
+        toastManager.add({
+          type: "error",
+          title: "Unable to add project",
+          description: "Native API is unavailable.",
+        });
+        return;
+      }
 
       setIsAddingProject(true);
-      const finishAddingProject = () => {
+      const finishAddingProject = (options?: { closeComposer?: boolean }) => {
         setIsAddingProject(false);
-        setNewCwd("");
-        setAddingProject(false);
+        if (options?.closeComposer ?? true) {
+          setNewCwd("");
+          setAddingProject(false);
+        }
       };
 
       const existing = projects.find((project) => project.cwd === cwd);
@@ -509,18 +524,27 @@ export default function Sidebar() {
           defaultModel: DEFAULT_MODEL_BY_PROVIDER.codex,
           createdAt,
         });
-        await handleNewThread(projectId).catch(() => undefined);
+        try {
+          await handleNewThread(projectId);
+        } catch (error) {
+          toastManager.add({
+            type: "warning",
+            title: "Project added, but thread creation failed",
+            description: getErrorMessage(error, "Failed to create the initial thread."),
+          });
+        }
+        finishAddingProject();
       } catch (error) {
-        setIsAddingProject(false);
         toastManager.add({
           type: "error",
           title: "Unable to add project",
-          description:
-            error instanceof Error ? error.message : "An error occurred while adding the project.",
+          description: getErrorMessage(
+            error,
+            "The project could not be created. Check that the app is connected and try again.",
+          ),
         });
-        return;
+        finishAddingProject({ closeComposer: false });
       }
-      finishAddingProject();
     },
     [focusMostRecentThreadForProject, handleNewThread, isAddingProject, projects],
   );
@@ -1297,7 +1321,7 @@ export default function Sidebar() {
       </SidebarContent>
 
       <SidebarSeparator />
-      <SidebarFooter className="gap-0 p-3">
+      <SidebarFooter className="gap-2 p-3">
         {addingProject ? (
           <>
             <p className="mb-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70">
@@ -1350,6 +1374,21 @@ export default function Sidebar() {
             + Add project
           </button>
         )}
+        <button
+          type="button"
+          className={cn(
+            "flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors duration-150",
+            pathname === "/settings"
+              ? "bg-accent text-foreground"
+              : "hover:bg-accent/60 hover:text-foreground",
+          )}
+          onClick={() => {
+            void navigate({ to: "/settings" });
+          }}
+        >
+          <SettingsIcon className="size-4 shrink-0" />
+          <span>Settings</span>
+        </button>
       </SidebarFooter>
     </>
   );

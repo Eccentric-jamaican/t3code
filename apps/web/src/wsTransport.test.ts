@@ -172,4 +172,15 @@ describe("WsTransport", () => {
 
     transport.dispose();
   });
+
+  it("rejects pending requests when the socket closes", async () => {
+    const transport = new WsTransport("ws://localhost:3020");
+    const socket = getSocket();
+    socket.open();
+
+    const requestPromise = transport.request("projects.list");
+    socket.close();
+
+    await expect(requestPromise).rejects.toThrow("Connection to the T3 Code server was lost.");
+  });
 });

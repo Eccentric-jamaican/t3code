@@ -1,28 +1,43 @@
 {
   "name": "@t3tools/shared",
-  "version": "0.0.0-alpha.1",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "exports": {
     "./model": {
       "types": "./src/model.ts",
-      "import": "./src/model.ts"
+      "development": "./src/model.ts",
+      "browser": "./src/model.ts",
+      "import": "./src/model.ts",
+      "default": "./src/model.ts"
     },
     "./git": {
       "types": "./src/git.ts",
-      "import": "./src/git.ts"
+      "development": "./src/git.ts",
+      "browser": "./src/git.ts",
+      "import": "./src/git.ts",
+      "default": "./src/git.ts"
     },
     "./logging": {
       "types": "./src/logging.ts",
-      "import": "./src/logging.ts"
-    },
-    "./shell": {
-      "types": "./src/shell.ts",
-      "import": "./src/shell.ts"
+      "development": "./src/logging.ts",
+      "browser": "./src/logging.ts",
+      "import": "./src/logging.ts",
+      "default": "./src/logging.ts"
     },
     "./Net": {
       "types": "./src/Net.ts",
-      "import": "./src/Net.ts"
+      "development": "./src/Net.ts",
+      "browser": "./src/Net.ts",
+      "import": "./src/Net.ts",
+      "default": "./src/Net.ts"
+    },
+    "./branding": {
+      "types": "./src/branding.ts",
+      "development": "./src/branding.ts",
+      "browser": "./src/branding.ts",
+      "import": "./src/branding.ts",
+      "default": "./src/branding.ts"
     }
   },
   "scripts": {

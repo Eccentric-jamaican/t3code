@@ -67,9 +67,23 @@ describe("getAutoUpdateDisabledReason", () => {
         isPackaged: false,
         platform: "darwin",
         appImage: undefined,
+        disabledByBranding: false,
         disabledByEnv: false,
       }),
     ).toContain("packaged production builds");
+  });
+
+  it("reports branding-disabled auto updates", () => {
+    expect(
+      getAutoUpdateDisabledReason({
+        isDevelopment: false,
+        isPackaged: true,
+        platform: "darwin",
+        appImage: undefined,
+        disabledByBranding: true,
+        disabledByEnv: false,
+      }),
+    ).toContain("official Alpha app remains the maintained update channel");
   });
 
   it("reports env-disabled auto updates", () => {
@@ -79,6 +93,7 @@ describe("getAutoUpdateDisabledReason", () => {
         isPackaged: true,
         platform: "darwin",
         appImage: undefined,
+        disabledByBranding: false,
         disabledByEnv: true,
       }),
     ).toContain("T3CODE_DISABLE_AUTO_UPDATE");
@@ -91,6 +106,7 @@ describe("getAutoUpdateDisabledReason", () => {
         isPackaged: true,
         platform: "linux",
         appImage: undefined,
+        disabledByBranding: false,
         disabledByEnv: false,
       }),
     ).toContain("AppImage");
