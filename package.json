@@ -30,6 +30,9 @@
     "build:desktop": "turbo run build --filter=@t3tools/desktop --filter=t3",
     "dist:desktop:win": "node scripts/build-desktop-artifact.ts --platform win --target nsis --arch x64"
   },
+  "engines": {
+    "node": "^22.13 || ^23.4 || >=24.10"
+  },
   "devDependencies": {
     "@types/node": "catalog:",
     "oxfmt": "^0.35.0",
