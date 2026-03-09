@@ -28,6 +28,7 @@
     "build:contracts": "turbo run build --filter=@t3tools/contracts",
     "build:marketing": "turbo run build --filter=@t3tools/marketing",
     "build:desktop": "turbo run build --filter=@t3tools/desktop --filter=t3",
+    "dist:desktop:artifact": "node scripts/build-desktop-artifact.ts",
     "dist:desktop:win": "node scripts/build-desktop-artifact.ts --platform win --target nsis --arch x64"
   },
   "engines": {
