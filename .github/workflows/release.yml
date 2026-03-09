@@ -10,6 +10,11 @@ on:
         description: "Release version (for example 1.2.3 or v1.2.3)"
         required: true
         type: string
+      publish_cli:
+        description: "Also publish the npm CLI package"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -213,6 +218,7 @@ jobs:
 
   publish_cli:
     name: Publish CLI to npm
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_cli == true }}
     needs: [preflight, build]
     runs-on: ubuntu-24.04
     steps:
@@ -243,7 +249,7 @@ jobs:
 
   release:
     name: Publish GitHub Release
-    needs: [preflight, build, publish_cli]
+    needs: [preflight, build]
     runs-on: ubuntu-24.04
     steps:
       - name: Download all desktop artifacts
