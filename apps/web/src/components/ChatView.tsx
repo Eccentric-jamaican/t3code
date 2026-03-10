@@ -31,6 +31,7 @@ import {
 } from "@t3tools/shared/model";
 import {
   memo,
+  type PointerEvent as ReactPointerEvent,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -39,6 +40,7 @@ import {
   useState,
   useId,
 } from "react";
+import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useDebouncedValue } from "@tanstack/react-pacer";
 import { useNavigate, useSearch } from "@tanstack/react-router";
@@ -217,6 +219,7 @@ import { selectThreadTerminalState, useTerminalStateStore } from "../terminalSta
 import { clamp } from "effect/Number";
 import { ComposerPromptEditor, type ComposerPromptEditorHandle } from "./ComposerPromptEditor";
 import { estimateTimelineMessageHeight } from "./timelineHeight";
+import { buildQuotedSelectionInsertion } from "../selectedTextPrompt";
 
 function formatMessageMeta(createdAt: string, duration: string | null): string {
   if (!duration) return formatTimestamp(createdAt);
@@ -238,6 +241,76 @@ const EMPTY_AVAILABLE_EDITORS: EditorId[] = [];
 const EMPTY_PROVIDER_STATUSES: ServerProviderStatus[] = [];
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
 const COMPOSER_PATH_QUERY_DEBOUNCE_MS = 120;
+const CHAT_SELECTION_REGION_ATTRIBUTE = "data-chat-selection-region";
+const CHAT_SELECTION_REGION_VALUE = "assistant-output";
+const CHAT_SELECTION_ACTION_LABEL = "Ask about selected text";
+const CHAT_SELECTION_ACTION_WIDTH_PX = 76;
+const CHAT_SELECTION_ACTION_HEIGHT_PX = 36;
+const CHAT_SELECTION_VIEWPORT_PADDING_PX = 12;
+const CHAT_SELECTION_ACTION_OFFSET_PX = 8;
+const CHAT_SELECTION_IGNORE_SELECTOR =
+  "button, summary, [role='button'], [role='menuitem'], input, textarea, select, option, [data-chat-selection-ignore='true']";
+
+interface AssistantSelectionActionState {
+  left: number;
+  top: number;
+  selectedText: string;
+}
+
+function getSelectionRegionElement(node: Node | null): HTMLElement | null {
+  if (!node) return null;
+  const element = node instanceof Element ? node : node.parentElement;
+  return (
+    element?.closest<HTMLElement>(
+      `[${CHAT_SELECTION_REGION_ATTRIBUTE}="${CHAT_SELECTION_REGION_VALUE}"]`,
+    ) ?? null
+  );
+}
+
+function isIgnoredSelectionTarget(node: Node | null): boolean {
+  if (!node) return false;
+  const element = node instanceof Element ? node : node.parentElement;
+  return Boolean(element?.closest(CHAT_SELECTION_IGNORE_SELECTOR));
+}
+
+function getSelectionAnchorRect(range: Range): DOMRect | null {
+  const rects = Array.from(range.getClientRects()).filter(
+    (rect) => rect.width > 0 || rect.height > 0,
+  );
+  const anchorRect = rects.at(-1) ?? range.getBoundingClientRect();
+  if (anchorRect.width <= 0 && anchorRect.height <= 0) {
+    return null;
+  }
+  return anchorRect;
+}
+
+function getSelectionActionPosition(anchorRect: DOMRect): { left: number; top: number } {
+  const preferredLeft = anchorRect.right + CHAT_SELECTION_ACTION_OFFSET_PX;
+  const preferredTop = anchorRect.bottom + CHAT_SELECTION_ACTION_OFFSET_PX;
+  const maxLeft =
+    window.innerWidth - CHAT_SELECTION_VIEWPORT_PADDING_PX - CHAT_SELECTION_ACTION_WIDTH_PX;
+  const maxTop =
+    window.innerHeight - CHAT_SELECTION_VIEWPORT_PADDING_PX - CHAT_SELECTION_ACTION_HEIGHT_PX;
+  const minLeft = CHAT_SELECTION_VIEWPORT_PADDING_PX;
+  const minTop = CHAT_SELECTION_VIEWPORT_PADDING_PX;
+
+  const left = clamp(
+    preferredLeft > maxLeft ? anchorRect.left - CHAT_SELECTION_ACTION_WIDTH_PX : preferredLeft,
+    {
+      minimum: minLeft,
+      maximum: Math.max(minLeft, maxLeft),
+    },
+  );
+  const top = clamp(
+    preferredTop > maxTop ? anchorRect.top - CHAT_SELECTION_ACTION_HEIGHT_PX : preferredTop,
+    {
+      minimum: minTop,
+      maximum: Math.max(minTop, maxTop),
+    },
+  );
+
+  return { left, top };
+}
 const SCRIPT_TERMINAL_COLS = 120;
 const SCRIPT_TERMINAL_ROWS = 30;
 const WORKTREE_BRANCH_PREFIX = "t3code";
@@ -3088,6 +3161,22 @@ export default function ChatView({ threadId }: ChatViewProps) {
     return { value: promptRef.current, cursor: composerCursor };
   }, [composerCursor]);
 
+  const onAskAboutSelectedText = useCallback(
+    (selectedText: string) => {
+      const snapshot = readComposerSnapshot();
+      const insertion = buildQuotedSelectionInsertion(snapshot.value, selectedText);
+      if (!insertion) {
+        return;
+      }
+
+      promptRef.current = snapshot.value;
+      applyPromptReplacement(snapshot.value.length, snapshot.value.length, insertion, {
+        expectedText: "",
+      });
+    },
+    [applyPromptReplacement, readComposerSnapshot],
+  );
+
   const resolveActiveComposerTrigger = useCallback((): {
     snapshot: { value: string; cursor: number };
     trigger: ComposerTrigger | null;
@@ -3384,6 +3473,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
           markdownCwd={gitCwd ?? undefined}
           resolvedTheme={resolvedTheme}
           workspaceRoot={activeProject?.cwd ?? undefined}
+          onAskAboutSelectedText={onAskAboutSelectedText}
         />
       </div>
 
@@ -4557,7 +4647,9 @@ const ProposedPlanCard = memo(function ProposedPlanCard({
       </div>
       <div className="mt-4">
         <div className={cn("relative", canCollapse && !expanded && "max-h-104 overflow-hidden")}>
-          <ChatMarkdown text={planMarkdown} cwd={cwd} isStreaming={false} />
+          <div {...{ [CHAT_SELECTION_REGION_ATTRIBUTE]: CHAT_SELECTION_REGION_VALUE }}>
+            <ChatMarkdown text={planMarkdown} cwd={cwd} isStreaming={false} />
+          </div>
           {canCollapse && !expanded ? (
             <div className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-linear-to-t from-card/95 via-card/80 to-transparent" />
           ) : null}
@@ -4643,6 +4735,7 @@ interface MessagesTimelineProps {
   markdownCwd: string | undefined;
   resolvedTheme: "light" | "dark";
   workspaceRoot: string | undefined;
+  onAskAboutSelectedText: (selectedText: string) => void;
 }
 
 type TimelineEntry = ReturnType<typeof deriveTimelineEntries>[number];
@@ -4697,9 +4790,89 @@ const MessagesTimeline = memo(function MessagesTimeline({
   markdownCwd,
   resolvedTheme,
   workspaceRoot,
+  onAskAboutSelectedText,
 }: MessagesTimelineProps) {
   const timelineRootRef = useRef<HTMLDivElement | null>(null);
   const [timelineWidthPx, setTimelineWidthPx] = useState<number | null>(null);
+  const [selectionActionState, setSelectionActionState] =
+    useState<AssistantSelectionActionState | null>(null);
+  const selectionActionStateRef = useRef<AssistantSelectionActionState | null>(null);
+  const selectionActionPointerDownRef = useRef(false);
+  const selectionActionFrameRef = useRef<number | null>(null);
+
+  const clearSelectionAction = useCallback(() => {
+    selectionActionStateRef.current = null;
+    setSelectionActionState(null);
+  }, []);
+
+  const updateSelectionActionState = useCallback(() => {
+    if (selectionActionPointerDownRef.current) {
+      return;
+    }
+
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+      clearSelectionAction();
+      return;
+    }
+
+    const range = selection.getRangeAt(0);
+    const startRegion = getSelectionRegionElement(range.startContainer);
+    const endRegion = getSelectionRegionElement(range.endContainer);
+    if (!startRegion || startRegion !== endRegion || !startRegion.isConnected) {
+      clearSelectionAction();
+      return;
+    }
+
+    if (
+      isIgnoredSelectionTarget(range.startContainer) ||
+      isIgnoredSelectionTarget(range.endContainer) ||
+      isIgnoredSelectionTarget(range.commonAncestorContainer)
+    ) {
+      clearSelectionAction();
+      return;
+    }
+
+    const selectedText = selection.toString();
+    if (!buildQuotedSelectionInsertion("", selectedText)) {
+      clearSelectionAction();
+      return;
+    }
+
+    const anchorRect = getSelectionAnchorRect(range);
+    if (!anchorRect) {
+      clearSelectionAction();
+      return;
+    }
+
+    const nextState = {
+      selectedText,
+      ...getSelectionActionPosition(anchorRect),
+    };
+
+    const previousState = selectionActionStateRef.current;
+    if (
+      previousState &&
+      previousState.selectedText === nextState.selectedText &&
+      Math.abs(previousState.left - nextState.left) < 0.5 &&
+      Math.abs(previousState.top - nextState.top) < 0.5
+    ) {
+      return;
+    }
+
+    selectionActionStateRef.current = nextState;
+    setSelectionActionState(nextState);
+  }, [clearSelectionAction]);
+
+  const scheduleSelectionActionUpdate = useCallback(() => {
+    if (selectionActionFrameRef.current !== null) {
+      window.cancelAnimationFrame(selectionActionFrameRef.current);
+    }
+    selectionActionFrameRef.current = window.requestAnimationFrame(() => {
+      selectionActionFrameRef.current = null;
+      updateSelectionActionState();
+    });
+  }, [updateSelectionActionState]);
 
   useLayoutEffect(() => {
     const timelineRoot = timelineRootRef.current;
@@ -4725,6 +4898,45 @@ const MessagesTimeline = memo(function MessagesTimeline({
       observer.disconnect();
     };
   }, [hasMessages, isWorking]);
+
+  useEffect(() => {
+    const handleSelectionChange = () => {
+      scheduleSelectionActionUpdate();
+    };
+    const handlePointerUp = () => {
+      scheduleSelectionActionUpdate();
+    };
+    const handleViewportChange = () => {
+      scheduleSelectionActionUpdate();
+    };
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target instanceof Element ? event.target : null;
+      if (target?.closest('[data-chat-selection-action="ask"]')) {
+        return;
+      }
+      selectionActionPointerDownRef.current = false;
+    };
+
+    document.addEventListener("selectionchange", handleSelectionChange);
+    document.addEventListener("mouseup", handlePointerUp);
+    document.addEventListener("touchend", handlePointerUp);
+    document.addEventListener("pointerdown", handlePointerDown, true);
+    window.addEventListener("scroll", handleViewportChange, true);
+    window.addEventListener("resize", handleViewportChange);
+
+    return () => {
+      document.removeEventListener("selectionchange", handleSelectionChange);
+      document.removeEventListener("mouseup", handlePointerUp);
+      document.removeEventListener("touchend", handlePointerUp);
+      document.removeEventListener("pointerdown", handlePointerDown, true);
+      window.removeEventListener("scroll", handleViewportChange, true);
+      window.removeEventListener("resize", handleViewportChange);
+      if (selectionActionFrameRef.current !== null) {
+        window.cancelAnimationFrame(selectionActionFrameRef.current);
+        selectionActionFrameRef.current = null;
+      }
+    };
+  }, [scheduleSelectionActionUpdate]);
 
   const rows = useMemo<TimelineRow[]>(() => {
     const nextRows: TimelineRow[] = [];
@@ -4785,6 +4997,10 @@ const MessagesTimeline = memo(function MessagesTimeline({
 
     return nextRows;
   }, [timelineEntries, completionDividerBeforeEntryId, isWorking, activeTurnStartedAt]);
+
+  useEffect(() => {
+    scheduleSelectionActionUpdate();
+  }, [scheduleSelectionActionUpdate, timelineEntries]);
 
   const firstUnvirtualizedRowIndex = useMemo(() => {
     const firstTailRowIndex = Math.max(rows.length - ALWAYS_UNVIRTUALIZED_TAIL_ROWS, 0);
@@ -4877,6 +5093,51 @@ const MessagesTimeline = memo(function MessagesTimeline({
       }
     };
   }, []);
+  const onSelectionActionPointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLButtonElement>) => {
+      selectionActionPointerDownRef.current = true;
+      event.preventDefault();
+      event.stopPropagation();
+    },
+    [],
+  );
+  const onSelectionActionClick = useCallback(() => {
+    const selectedText = selectionActionStateRef.current?.selectedText;
+    selectionActionPointerDownRef.current = false;
+    clearSelectionAction();
+    window.getSelection()?.removeAllRanges();
+    if (!selectedText) {
+      return;
+    }
+    onAskAboutSelectedText(selectedText);
+  }, [clearSelectionAction, onAskAboutSelectedText]);
+
+  const selectionActionOverlay =
+    selectionActionState && typeof document !== "undefined"
+      ? createPortal(
+          <div className="pointer-events-none fixed inset-0 z-50">
+            <Button
+              aria-label={CHAT_SELECTION_ACTION_LABEL}
+              data-chat-selection-action="ask"
+              variant="secondary"
+              size="xs"
+              className="pointer-events-auto fixed h-9 rounded-full border border-border/80 bg-card/95 px-3 text-foreground shadow-lg/20 backdrop-blur-sm"
+              style={{
+                left: `${selectionActionState.left}px`,
+                top: `${selectionActionState.top}px`,
+              }}
+              onPointerDown={onSelectionActionPointerDown}
+              onClick={onSelectionActionClick}
+            >
+              <span aria-hidden="true" className="font-serif text-sm leading-none opacity-80">
+                "
+              </span>
+              <span>Ask</span>
+            </Button>
+          </div>,
+          document.body,
+        )
+      : null;
 
   const virtualRows = rowVirtualizer.getVirtualItems();
   const nonVirtualizedRows = rows.slice(virtualizedRowCount);
@@ -5052,11 +5313,13 @@ const MessagesTimeline = memo(function MessagesTimeline({
                 </div>
               )}
               <div className="min-w-0 px-1 py-0.5">
-                <ChatMarkdown
-                  text={messageText}
-                  cwd={markdownCwd}
-                  isStreaming={Boolean(row.message.streaming)}
-                />
+                <div {...{ [CHAT_SELECTION_REGION_ATTRIBUTE]: CHAT_SELECTION_REGION_VALUE }}>
+                  <ChatMarkdown
+                    text={messageText}
+                    cwd={markdownCwd}
+                    isStreaming={Boolean(row.message.streaming)}
+                  />
+                </div>
                 {(() => {
                   const turnSummary = turnDiffSummaryByAssistantMessageId.get(row.message.id);
                   if (!turnSummary) return null;
@@ -5191,6 +5454,7 @@ const MessagesTimeline = memo(function MessagesTimeline({
       {nonVirtualizedRows.map((row) => (
         <div key={`non-virtual-row:${row.id}`}>{renderRowContent(row)}</div>
       ))}
+      {selectionActionOverlay}
     </div>
   );
 });

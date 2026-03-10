@@ -4,6 +4,7 @@ import "../index.css";
 import {
   ORCHESTRATION_WS_METHODS,
   type MessageId,
+  type OrchestrationProposedPlanId,
   type OrchestrationReadModel,
   type ProjectId,
   type ServerConfig,
@@ -256,6 +257,73 @@ function createDraftOnlySnapshot(): OrchestrationReadModel {
   };
 }
 
+function createSelectionFeatureSnapshot(): OrchestrationReadModel {
+  return {
+    snapshotSequence: 1,
+    projects: [
+      {
+        id: PROJECT_ID,
+        title: "Project",
+        workspaceRoot: "/repo/project",
+        defaultModel: "gpt-5",
+        scripts: [],
+        createdAt: NOW_ISO,
+        updatedAt: NOW_ISO,
+        deletedAt: null,
+      },
+    ],
+    threads: [
+      {
+        id: THREAD_ID,
+        projectId: PROJECT_ID,
+        title: "Selection feature thread",
+        model: "gpt-5",
+        interactionMode: "default",
+        runtimeMode: "full-access",
+        branch: "main",
+        worktreePath: null,
+        latestTurn: null,
+        createdAt: NOW_ISO,
+        updatedAt: NOW_ISO,
+        deletedAt: null,
+        messages: [
+          createUserMessage({
+            id: "msg-user-selection" as MessageId,
+            text: "User question about daemons",
+            offsetSeconds: 0,
+          }),
+          createAssistantMessage({
+            id: "msg-assistant-selection" as MessageId,
+            text: "A daemon is a background process that runs without direct user interaction.",
+            offsetSeconds: 3,
+          }),
+        ],
+        activities: [],
+        proposedPlans: [
+          {
+            id: "plan-selection-1" as OrchestrationProposedPlanId,
+            turnId: null,
+            planMarkdown: "# Plan heading\n\nExplain this planned change.",
+            createdAt: isoAt(6),
+            updatedAt: isoAt(6),
+          },
+        ],
+        checkpoints: [],
+        session: {
+          threadId: THREAD_ID,
+          status: "ready",
+          providerName: "codex",
+          runtimeMode: "full-access",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: NOW_ISO,
+        },
+      },
+    ],
+    updatedAt: NOW_ISO,
+  };
+}
+
 function resolveWsRpc(tag: string): unknown {
   if (tag === ORCHESTRATION_WS_METHODS.getSnapshot) {
     return fixture.snapshot;
@@ -396,6 +464,50 @@ async function waitForComposerEditor(): Promise<HTMLElement> {
   return waitForElement(
     () => document.querySelector<HTMLElement>('[contenteditable="true"]'),
     "Unable to find composer editor.",
+  );
+}
+
+function findFirstTextNode(root: Node): Text | null {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let current = walker.nextNode();
+  while (current) {
+    if (current.textContent?.trim().length) {
+      return current as Text;
+    }
+    current = walker.nextNode();
+  }
+  return null;
+}
+
+async function selectTextInElement(element: Element): Promise<void> {
+  const textNode = findFirstTextNode(element);
+  if (!textNode || !textNode.textContent) {
+    throw new Error("Unable to find selectable text node.");
+  }
+
+  const range = document.createRange();
+  range.setStart(textNode, 0);
+  range.setEnd(textNode, textNode.textContent.length);
+
+  const selection = window.getSelection();
+  selection?.removeAllRanges();
+  selection?.addRange(range);
+  document.dispatchEvent(new Event("selectionchange"));
+  document.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+  await waitForLayout();
+}
+
+async function clearSelectedText(): Promise<void> {
+  window.getSelection()?.removeAllRanges();
+  document.dispatchEvent(new Event("selectionchange"));
+  await waitForLayout();
+}
+
+async function waitForSelectionAskButton(): Promise<HTMLButtonElement> {
+  return waitForElement(
+    () =>
+      document.querySelector<HTMLButtonElement>('button[aria-label="Ask about selected text"]'),
+    "Unable to find selection ask button.",
   );
 }
 
@@ -747,6 +859,100 @@ describe("ChatView timeline estimator parity (full app)", () => {
       }
     },
   );
+
+  it("shows the selection action for assistant markdown and inserts the quoted text into the composer", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSelectionFeatureSnapshot(),
+    });
+
+    try {
+      const assistantParagraph = await waitForElement(
+        () =>
+          document.querySelector<HTMLElement>(
+            '[data-message-role="assistant"] [data-chat-selection-region="assistant-output"] p',
+          ),
+        "Unable to find assistant markdown paragraph.",
+      );
+
+      await selectTextInElement(assistantParagraph);
+
+      const askButton = await waitForSelectionAskButton();
+      askButton.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+      askButton.click();
+
+      await vi.waitFor(
+        () => {
+          const prompt =
+            useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.prompt ?? "";
+          expect(prompt).toBe(
+            "> A daemon is a background process that runs without direct user interaction.\n\n",
+          );
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      const composerEditor = await waitForComposerEditor();
+      expect(document.activeElement).toBe(composerEditor);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("does not show the selection action for user-authored messages", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSelectionFeatureSnapshot(),
+    });
+
+    try {
+      const userMessage = await waitForElement(
+        () => document.querySelector<HTMLElement>('[data-message-role="user"] pre'),
+        "Unable to find user message text.",
+      );
+
+      await selectTextInElement(userMessage);
+      await waitForLayout();
+
+      expect(
+        document.querySelector('button[aria-label="Ask about selected text"]'),
+      ).toBeNull();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("shows the selection action for proposed plan markdown", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSelectionFeatureSnapshot(),
+    });
+
+    try {
+      const planHeading = await waitForElement(
+        () =>
+          document.querySelector<HTMLElement>(
+            '[data-timeline-row-kind="proposed-plan"] [data-chat-selection-region="assistant-output"] h1',
+          ),
+        "Unable to find proposed plan heading.",
+      );
+
+      await selectTextInElement(planHeading);
+      await waitForSelectionAskButton();
+      await clearSelectedText();
+
+      await vi.waitFor(
+        () => {
+          expect(
+            document.querySelector('button[aria-label="Ask about selected text"]'),
+          ).toBeNull();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
 
   it("opens the project cwd for draft threads without a worktree path", async () => {
     useComposerDraftStore.setState({
