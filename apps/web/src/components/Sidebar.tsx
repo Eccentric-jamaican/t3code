@@ -553,7 +553,7 @@ export default function Sidebar() {
     void addProjectFromPath(newCwd);
   };
 
-  const handlePickFolder = async () => {
+  const handlePickFolder = useCallback(async () => {
     const api = readNativeApi();
     if (!api || isPickingFolder) return;
     setIsPickingFolder(true);
@@ -567,7 +567,18 @@ export default function Sidebar() {
       await addProjectFromPath(pickedPath);
     }
     setIsPickingFolder(false);
-  };
+  }, [addProjectFromPath, isPickingFolder]);
+
+  const handleStartAddingProject = useCallback(() => {
+    if (isAddingProject || isPickingFolder) return;
+
+    if (window.desktopBridge) {
+      void handlePickFolder();
+      return;
+    }
+
+    setAddingProject(true);
+  }, [handlePickFolder, isAddingProject, isPickingFolder]);
 
   const cancelRename = useCallback(() => {
     setRenamingThreadId(null);
@@ -1049,6 +1060,61 @@ export default function Sidebar() {
 
       <SidebarContent className="gap-0">
         <SidebarGroup className="px-2 py-2">
+          <div className="px-1 pb-3">
+            {addingProject ? (
+              <>
+                <p className="mb-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70">
+                  Add project
+                </p>
+                <input
+                  className="mb-2 w-full rounded-md border border-border bg-secondary px-2 py-1.5 font-mono text-xs text-foreground placeholder:text-muted-foreground/40 focus:border-ring focus:outline-none"
+                  placeholder="/path/to/project"
+                  value={newCwd}
+                  onChange={(event) => setNewCwd(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") handleAddProject();
+                    if (event.key === "Escape") setAddingProject(false);
+                  }}
+                />
+                {isElectron && (
+                  <button
+                    type="button"
+                    className="mb-2 flex w-full items-center justify-center rounded-md border border-border px-2 py-1.5 text-xs text-muted-foreground transition-colors duration-150 hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-60"
+                    onClick={() => void handlePickFolder()}
+                    disabled={isPickingFolder || isAddingProject}
+                  >
+                    {isPickingFolder ? "Picking folder..." : "Browse for folder"}
+                  </button>
+                )}
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    className="flex-1 rounded-md bg-primary px-2 py-1 text-xs font-medium text-primary-foreground transition-colors duration-150 hover:bg-primary/90"
+                    onClick={handleAddProject}
+                    disabled={isAddingProject}
+                  >
+                    {isAddingProject ? "Adding..." : "Add"}
+                  </button>
+                  <button
+                    type="button"
+                    className="flex-1 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground/80 transition-colors duration-150 hover:bg-secondary"
+                    onClick={() => setAddingProject(false)}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </>
+            ) : (
+              <button
+                type="button"
+                className="flex w-full items-center justify-center gap-1 rounded-md border border-dashed border-border py-2 text-xs text-muted-foreground/70 transition-colors duration-150 hover:border-ring hover:text-muted-foreground"
+                onClick={handleStartAddingProject}
+              >
+                + Add project
+              </button>
+            )}
+          </div>
+
           <SidebarMenu>
             {projects.map((project) => {
               const projectThreads = threads
@@ -1322,58 +1388,6 @@ export default function Sidebar() {
 
       <SidebarSeparator />
       <SidebarFooter className="gap-2 p-3">
-        {addingProject ? (
-          <>
-            <p className="mb-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70">
-              Add project
-            </p>
-            <input
-              className="mb-2 w-full rounded-md border border-border bg-secondary px-2 py-1.5 font-mono text-xs text-foreground placeholder:text-muted-foreground/40 focus:border-ring focus:outline-none"
-              placeholder="/path/to/project"
-              value={newCwd}
-              onChange={(event) => setNewCwd(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") handleAddProject();
-                if (event.key === "Escape") setAddingProject(false);
-              }}
-            />
-            {isElectron && (
-              <button
-                type="button"
-                className="mb-2 flex w-full items-center justify-center rounded-md border border-border px-2 py-1.5 text-xs text-muted-foreground transition-colors duration-150 hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-60"
-                onClick={() => void handlePickFolder()}
-                disabled={isPickingFolder || isAddingProject}
-              >
-                {isPickingFolder ? "Picking folder..." : "Browse for folder"}
-              </button>
-            )}
-            <div className="flex gap-2">
-              <button
-                type="button"
-                className="flex-1 rounded-md bg-primary px-2 py-1 text-xs font-medium text-primary-foreground transition-colors duration-150 hover:bg-primary/90"
-                onClick={handleAddProject}
-                disabled={isAddingProject}
-              >
-                {isAddingProject ? "Adding..." : "Add"}
-              </button>
-              <button
-                type="button"
-                className="flex-1 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground/80 transition-colors duration-150 hover:bg-secondary"
-                onClick={() => setAddingProject(false)}
-              >
-                Cancel
-              </button>
-            </div>
-          </>
-        ) : (
-          <button
-            type="button"
-            className="flex w-full items-center justify-center gap-1 rounded-md border border-dashed border-border py-2 text-xs text-muted-foreground/70 transition-colors duration-150 hover:border-ring hover:text-muted-foreground"
-            onClick={() => setAddingProject(true)}
-          >
-            + Add project
-          </button>
-        )}
         <button
           type="button"
           className={cn(
