@@ -143,6 +143,7 @@ import {
   CopyIcon,
   CheckIcon,
   ZapIcon,
+  PinIcon,
 } from "lucide-react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
@@ -211,6 +212,7 @@ import {
   type ComposerImageAttachment,
   type DraftThreadEnvMode,
   type DraftThreadState,
+  type PinnedSelectionDraft,
   type PersistedComposerImageAttachment,
   useComposerDraftStore,
   useComposerThreadDraft,
@@ -219,7 +221,12 @@ import { selectThreadTerminalState, useTerminalStateStore } from "../terminalSta
 import { clamp } from "effect/Number";
 import { ComposerPromptEditor, type ComposerPromptEditorHandle } from "./ComposerPromptEditor";
 import { estimateTimelineMessageHeight } from "./timelineHeight";
-import { buildQuotedSelectionInsertion } from "../selectedTextPrompt";
+import {
+  buildQuotedSelectionInsertion,
+  normalizeSelectedText,
+  reconstructRangeFromOffsets,
+  serializeRangeWithinContainer,
+} from "../chatPinnedSelections";
 
 function formatMessageMeta(createdAt: string, duration: string | null): string {
   if (!duration) return formatTimestamp(createdAt);
@@ -243,15 +250,31 @@ const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnsw
 const COMPOSER_PATH_QUERY_DEBOUNCE_MS = 120;
 const CHAT_SELECTION_REGION_ATTRIBUTE = "data-chat-selection-region";
 const CHAT_SELECTION_REGION_VALUE = "assistant-output";
-const CHAT_SELECTION_ACTION_LABEL = "Ask about selected text";
-const CHAT_SELECTION_ACTION_WIDTH_PX = 76;
+const CHAT_SELECTION_SOURCE_KIND_ATTRIBUTE = "data-chat-selection-source-kind";
+const CHAT_SELECTION_SOURCE_ID_ATTRIBUTE = "data-chat-selection-source-id";
+const CHAT_SELECTION_QUOTE_ACTION_LABEL = "Quote selected text";
+const CHAT_SELECTION_PIN_ACTION_LABEL = "Pin selected text";
+const CHAT_SELECTION_ACTION_WIDTH_PX = 96;
 const CHAT_SELECTION_ACTION_HEIGHT_PX = 36;
 const CHAT_SELECTION_VIEWPORT_PADDING_PX = 12;
 const CHAT_SELECTION_ACTION_OFFSET_PX = 8;
+const CHAT_PIN_MARKER_SIZE_PX = 24;
+const CHAT_PIN_MARKER_SCROLL_SETTLE_MS = 96;
 const CHAT_SELECTION_IGNORE_SELECTOR =
   "button, summary, [role='button'], [role='menuitem'], input, textarea, select, option, [data-chat-selection-ignore='true']";
 
 interface AssistantSelectionActionState {
+  left: number;
+  top: number;
+  selectedText: string;
+  sourceKind: PinnedSelectionDraft["sourceKind"];
+  sourceId: string;
+  plainTextStart: number;
+  plainTextEnd: number;
+}
+
+interface PinnedSelectionMarker {
+  id: string;
   left: number;
   top: number;
   selectedText: string;
@@ -265,6 +288,18 @@ function getSelectionRegionElement(node: Node | null): HTMLElement | null {
       `[${CHAT_SELECTION_REGION_ATTRIBUTE}="${CHAT_SELECTION_REGION_VALUE}"]`,
     ) ?? null
   );
+}
+
+function getSelectionSourceKind(
+  element: HTMLElement,
+): PinnedSelectionDraft["sourceKind"] | null {
+  const sourceKind = element.getAttribute(CHAT_SELECTION_SOURCE_KIND_ATTRIBUTE);
+  return sourceKind === "assistant-message" || sourceKind === "proposed-plan" ? sourceKind : null;
+}
+
+function getSelectionSourceId(element: HTMLElement): string | null {
+  const sourceId = element.getAttribute(CHAT_SELECTION_SOURCE_ID_ATTRIBUTE);
+  return sourceId && sourceId.length > 0 ? sourceId : null;
 }
 
 function isIgnoredSelectionTarget(node: Node | null): boolean {
@@ -282,6 +317,60 @@ function getSelectionAnchorRect(range: Range): DOMRect | null {
     return null;
   }
   return anchorRect;
+}
+
+function getPinnedSelectionMarkerPosition(range: Range): { left: number; top: number } | null {
+  const anchorRect = getSelectionAnchorRect(range);
+  if (!anchorRect) {
+    return null;
+  }
+
+  const minViewportEdge = CHAT_SELECTION_VIEWPORT_PADDING_PX;
+  const maxViewportEdgeX = window.innerWidth - CHAT_SELECTION_VIEWPORT_PADDING_PX;
+  const maxViewportEdgeY = window.innerHeight - CHAT_SELECTION_VIEWPORT_PADDING_PX;
+  const isOutsideViewport =
+    anchorRect.bottom <= minViewportEdge ||
+    anchorRect.top >= maxViewportEdgeY ||
+    anchorRect.right <= minViewportEdge ||
+    anchorRect.left >= maxViewportEdgeX;
+  if (isOutsideViewport) {
+    return null;
+  }
+
+  return {
+    left: clamp(anchorRect.right - Math.round(CHAT_PIN_MARKER_SIZE_PX * 0.4), {
+      minimum: minViewportEdge,
+      maximum: maxViewportEdgeX - CHAT_PIN_MARKER_SIZE_PX,
+    }),
+    top: clamp(anchorRect.top + anchorRect.height / 2 - CHAT_PIN_MARKER_SIZE_PX / 2, {
+      minimum: minViewportEdge,
+      maximum: maxViewportEdgeY - CHAT_PIN_MARKER_SIZE_PX,
+    }),
+  };
+}
+
+function scrollRangeIntoContainerView(
+  range: Range,
+  scrollContainer: HTMLElement,
+  behavior: ScrollBehavior = "smooth",
+): boolean {
+  const anchorRect = getSelectionAnchorRect(range);
+  if (!anchorRect) {
+    return false;
+  }
+
+  const containerRect = scrollContainer.getBoundingClientRect();
+  const targetTop =
+    scrollContainer.scrollTop +
+    (anchorRect.top - containerRect.top) -
+    (containerRect.height / 2 - anchorRect.height / 2);
+  const maxScrollTop = Math.max(0, scrollContainer.scrollHeight - scrollContainer.clientHeight);
+
+  scrollContainer.scrollTo({
+    top: clamp(targetTop, { minimum: 0, maximum: maxScrollTop }),
+    behavior,
+  });
+  return true;
 }
 
 function getSelectionActionPosition(anchorRect: DOMRect): { left: number; top: number } {
@@ -657,6 +746,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const composerDraft = useComposerThreadDraft(threadId);
   const prompt = composerDraft.prompt;
   const composerImages = composerDraft.images;
+  const composerPinnedSelections = composerDraft.pinnedSelections;
   const nonPersistedComposerImageIds = composerDraft.nonPersistedImageIds;
   const setComposerDraftPrompt = useComposerDraftStore((store) => store.setPrompt);
   const setComposerDraftProvider = useComposerDraftStore((store) => store.setProvider);
@@ -670,6 +760,13 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const addComposerDraftImage = useComposerDraftStore((store) => store.addImage);
   const addComposerDraftImages = useComposerDraftStore((store) => store.addImages);
   const removeComposerDraftImage = useComposerDraftStore((store) => store.removeImage);
+  const addComposerDraftPinnedSelection = useComposerDraftStore((store) => store.addPinnedSelection);
+  const removeComposerDraftPinnedSelection = useComposerDraftStore(
+    (store) => store.removePinnedSelection,
+  );
+  const clearComposerDraftPinnedSelections = useComposerDraftStore(
+    (store) => store.clearPinnedSelections,
+  );
   const clearComposerDraftPersistedAttachments = useComposerDraftStore(
     (store) => store.clearPersistedAttachments,
   );
@@ -717,6 +814,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const [lastInvokedScriptByProjectId, setLastInvokedScriptByProjectId] = useState<
     Record<string, string>
   >(() => readLastInvokedScriptByProjectFromStorage());
+  const [pendingPinnedSelectionJumpId, setPendingPinnedSelectionJumpId] = useState<string | null>(
+    null,
+  );
   const messagesScrollRef = useRef<HTMLDivElement>(null);
   const [messagesScrollElement, setMessagesScrollElement] = useState<HTMLDivElement | null>(null);
   const shouldAutoScrollRef = useRef(true);
@@ -2436,7 +2536,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
     if (standaloneSlashCommand) {
       await handleInteractionModeChange(standaloneSlashCommand);
       promptRef.current = "";
-      clearComposerDraftContent(activeThread.id);
+      setPrompt("");
       setComposerHighlightedItemId(null);
       setComposerCursor(0);
       setComposerTrigger(null);
@@ -3177,6 +3277,47 @@ export default function ChatView({ threadId }: ChatViewProps) {
     [applyPromptReplacement, readComposerSnapshot],
   );
 
+  const onPinSelectedText = useCallback(
+    (selection: Omit<PinnedSelectionDraft, "id" | "createdAt">) => {
+      if (!activeThread) {
+        return;
+      }
+      const normalizedSelectedText = normalizeSelectedText(selection.selectedText);
+      if (!normalizedSelectedText) {
+        return;
+      }
+      addComposerDraftPinnedSelection(activeThread.id, {
+        ...selection,
+        id: crypto.randomUUID(),
+        createdAt: new Date().toISOString(),
+        selectedText: normalizedSelectedText,
+      });
+      scheduleComposerFocus();
+    },
+    [activeThread, addComposerDraftPinnedSelection, scheduleComposerFocus],
+  );
+
+  const onRemovePinnedSelection = useCallback(
+    (pinnedSelectionId: string) => {
+      removeComposerDraftPinnedSelection(threadId, pinnedSelectionId);
+    },
+    [removeComposerDraftPinnedSelection, threadId],
+  );
+
+  const onClearPinnedSelections = useCallback(() => {
+    clearComposerDraftPinnedSelections(threadId);
+  }, [clearComposerDraftPinnedSelections, threadId]);
+
+  const onJumpToPinnedSelection = useCallback((pinnedSelectionId: string) => {
+    setPendingPinnedSelectionJumpId(pinnedSelectionId);
+  }, []);
+
+  const onPinnedSelectionJumpHandled = useCallback((pinnedSelectionId: string) => {
+    setPendingPinnedSelectionJumpId((current) =>
+      current === pinnedSelectionId ? null : current,
+    );
+  }, []);
+
   const resolveActiveComposerTrigger = useCallback((): {
     snapshot: { value: string; cursor: number };
     trigger: ComposerTrigger | null;
@@ -3473,7 +3614,12 @@ export default function ChatView({ threadId }: ChatViewProps) {
           markdownCwd={gitCwd ?? undefined}
           resolvedTheme={resolvedTheme}
           workspaceRoot={activeProject?.cwd ?? undefined}
+          pinnedSelections={composerPinnedSelections}
           onAskAboutSelectedText={onAskAboutSelectedText}
+          onPinSelectedText={onPinSelectedText}
+          onRemovePinnedSelection={onRemovePinnedSelection}
+          pendingPinnedSelectionJumpId={pendingPinnedSelectionJumpId}
+          onPinnedSelectionJumpHandled={onPinnedSelectionJumpHandled}
         />
       </div>
 
@@ -3541,6 +3687,50 @@ export default function ChatView({ threadId }: ChatViewProps) {
                 </div>
               )}
 
+              {!isComposerApprovalState &&
+              pendingUserInputs.length === 0 &&
+              composerPinnedSelections.length > 0 ? (
+                <div className="mb-2 flex items-center gap-1.5 overflow-x-auto pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                  {composerPinnedSelections.map((selection, index) => (
+                    <div
+                      key={selection.id}
+                      className="group/pinned-pill relative inline-flex shrink-0 items-center rounded-full border border-border/70 bg-muted/25 px-2 py-1 text-[11px] text-muted-foreground/90"
+                    >
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-1 rounded-full pr-0.5 text-left text-foreground/90 transition-[padding,color] hover:text-foreground group-hover/pinned-pill:pr-5 group-focus-within/pinned-pill:pr-5"
+                        onClick={() => onJumpToPinnedSelection(selection.id)}
+                        title={selection.selectedText}
+                      >
+                        <PinIcon className="size-3" />
+                        <span className="font-medium">{index + 1}</span>
+                        <span className="max-w-44 truncate">{selection.selectedText}</span>
+                      </button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-xs"
+                        className="pointer-events-none absolute right-1 top-1/2 size-4 -translate-y-1/2 rounded-full text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover/pinned-pill:pointer-events-auto group-hover/pinned-pill:opacity-100 group-focus-within/pinned-pill:pointer-events-auto group-focus-within/pinned-pill:opacity-100"
+                        onClick={() => onRemovePinnedSelection(selection.id)}
+                        aria-label={`Remove pinned passage ${index + 1}`}
+                      >
+                        <XIcon className="size-3" />
+                      </Button>
+                    </div>
+                  ))}
+                  {composerPinnedSelections.length > 1 ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="xs"
+                      className="shrink-0 rounded-full px-2 text-[11px] text-muted-foreground hover:text-foreground"
+                      onClick={onClearPinnedSelections}
+                    >
+                      Clear all
+                    </Button>
+                  ) : null}
+                </div>
+              ) : null}
               {!isComposerApprovalState && pendingUserInputs.length === 0 && composerImages.length > 0 && (
                 <div className="mb-2 flex flex-wrap gap-1.5">
                   {composerImages.map((image) => (
@@ -4545,10 +4735,12 @@ const ProposedPlanCard = memo(function ProposedPlanCard({
   planMarkdown,
   cwd,
   workspaceRoot,
+  sourceId,
 }: {
   planMarkdown: string;
   cwd: string | undefined;
   workspaceRoot: string | undefined;
+  sourceId: string;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [isSaveDialogOpen, setIsSaveDialogOpen] = useState(false);
@@ -4647,7 +4839,13 @@ const ProposedPlanCard = memo(function ProposedPlanCard({
       </div>
       <div className="mt-4">
         <div className={cn("relative", canCollapse && !expanded && "max-h-104 overflow-hidden")}>
-          <div {...{ [CHAT_SELECTION_REGION_ATTRIBUTE]: CHAT_SELECTION_REGION_VALUE }}>
+          <div
+            {...{
+              [CHAT_SELECTION_REGION_ATTRIBUTE]: CHAT_SELECTION_REGION_VALUE,
+              [CHAT_SELECTION_SOURCE_KIND_ATTRIBUTE]: "proposed-plan",
+              [CHAT_SELECTION_SOURCE_ID_ATTRIBUTE]: sourceId,
+            }}
+          >
             <ChatMarkdown text={planMarkdown} cwd={cwd} isStreaming={false} />
           </div>
           {canCollapse && !expanded ? (
@@ -4735,7 +4933,14 @@ interface MessagesTimelineProps {
   markdownCwd: string | undefined;
   resolvedTheme: "light" | "dark";
   workspaceRoot: string | undefined;
+  pinnedSelections: readonly PinnedSelectionDraft[];
   onAskAboutSelectedText: (selectedText: string) => void;
+  onPinSelectedText: (
+    selection: Omit<PinnedSelectionDraft, "id" | "createdAt">,
+  ) => void;
+  onRemovePinnedSelection: (pinnedSelectionId: string) => void;
+  pendingPinnedSelectionJumpId: string | null;
+  onPinnedSelectionJumpHandled: (pinnedSelectionId: string) => void;
 }
 
 type TimelineEntry = ReturnType<typeof deriveTimelineEntries>[number];
@@ -4790,20 +4995,87 @@ const MessagesTimeline = memo(function MessagesTimeline({
   markdownCwd,
   resolvedTheme,
   workspaceRoot,
+  pinnedSelections,
   onAskAboutSelectedText,
+  onPinSelectedText,
+  onRemovePinnedSelection,
+  pendingPinnedSelectionJumpId,
+  onPinnedSelectionJumpHandled,
 }: MessagesTimelineProps) {
   const timelineRootRef = useRef<HTMLDivElement | null>(null);
   const [timelineWidthPx, setTimelineWidthPx] = useState<number | null>(null);
   const [selectionActionState, setSelectionActionState] =
     useState<AssistantSelectionActionState | null>(null);
+  const [pinnedSelectionMarkers, setPinnedSelectionMarkers] = useState<PinnedSelectionMarker[]>([]);
   const selectionActionStateRef = useRef<AssistantSelectionActionState | null>(null);
   const selectionActionPointerDownRef = useRef(false);
   const selectionActionFrameRef = useRef<number | null>(null);
+  const pinnedSelectionMarkerFrameRef = useRef<number | null>(null);
+  const pinnedSelectionMarkerScrollTimeoutRef = useRef<number | null>(null);
+  const isTimelineScrollingRef = useRef(false);
 
   const clearSelectionAction = useCallback(() => {
     selectionActionStateRef.current = null;
     setSelectionActionState(null);
   }, []);
+
+  const hidePinnedSelectionMarkers = useCallback(() => {
+    setPinnedSelectionMarkers([]);
+  }, []);
+
+  const updatePinnedSelectionMarkers = useCallback(() => {
+    if (typeof document === "undefined" || isTimelineScrollingRef.current) {
+      hidePinnedSelectionMarkers();
+      return;
+    }
+
+    const nextMarkers = pinnedSelections.flatMap((selection) => {
+      const selector = `[${CHAT_SELECTION_SOURCE_KIND_ATTRIBUTE}="${selection.sourceKind}"][${CHAT_SELECTION_SOURCE_ID_ATTRIBUTE}="${selection.sourceId}"]`;
+      const region = document.querySelector<HTMLElement>(selector);
+      if (!region || !region.isConnected) {
+        return [];
+      }
+      const range = reconstructRangeFromOffsets(
+        region,
+        selection.plainTextStart,
+        selection.plainTextEnd,
+      );
+      if (!range) {
+        return [];
+      }
+      const markerPosition = getPinnedSelectionMarkerPosition(range);
+      if (!markerPosition) {
+        return [];
+      }
+      return [
+        {
+          id: selection.id,
+          left: markerPosition.left,
+          top: markerPosition.top,
+          selectedText: selection.selectedText,
+        } satisfies PinnedSelectionMarker,
+      ];
+    });
+
+    setPinnedSelectionMarkers((previousMarkers) => {
+      if (
+        previousMarkers.length === nextMarkers.length &&
+        previousMarkers.every((marker, index) => {
+          const nextMarker = nextMarkers[index];
+          return (
+            nextMarker &&
+            nextMarker.id === marker.id &&
+            nextMarker.selectedText === marker.selectedText &&
+            Math.abs(nextMarker.left - marker.left) < 0.5 &&
+            Math.abs(nextMarker.top - marker.top) < 0.5
+          );
+        })
+      ) {
+        return previousMarkers;
+      }
+      return nextMarkers;
+    });
+  }, [hidePinnedSelectionMarkers, pinnedSelections]);
 
   const updateSelectionActionState = useCallback(() => {
     if (selectionActionPointerDownRef.current) {
@@ -4834,7 +5106,16 @@ const MessagesTimeline = memo(function MessagesTimeline({
     }
 
     const selectedText = selection.toString();
-    if (!buildQuotedSelectionInsertion("", selectedText)) {
+    const normalizedSelectedText = normalizeSelectedText(selectedText);
+    if (!normalizedSelectedText) {
+      clearSelectionAction();
+      return;
+    }
+
+    const sourceKind = getSelectionSourceKind(startRegion);
+    const sourceId = getSelectionSourceId(startRegion);
+    const serializedRange = serializeRangeWithinContainer(startRegion, range);
+    if (!sourceKind || !sourceId || !serializedRange) {
       clearSelectionAction();
       return;
     }
@@ -4846,7 +5127,11 @@ const MessagesTimeline = memo(function MessagesTimeline({
     }
 
     const nextState = {
-      selectedText,
+      selectedText: normalizedSelectedText,
+      sourceKind,
+      sourceId,
+      plainTextStart: serializedRange.plainTextStart,
+      plainTextEnd: serializedRange.plainTextEnd,
       ...getSelectionActionPosition(anchorRect),
     };
 
@@ -4855,7 +5140,11 @@ const MessagesTimeline = memo(function MessagesTimeline({
       previousState &&
       previousState.selectedText === nextState.selectedText &&
       Math.abs(previousState.left - nextState.left) < 0.5 &&
-      Math.abs(previousState.top - nextState.top) < 0.5
+      Math.abs(previousState.top - nextState.top) < 0.5 &&
+      previousState.sourceKind === nextState.sourceKind &&
+      previousState.sourceId === nextState.sourceId &&
+      previousState.plainTextStart === nextState.plainTextStart &&
+      previousState.plainTextEnd === nextState.plainTextEnd
     ) {
       return;
     }
@@ -4873,6 +5162,29 @@ const MessagesTimeline = memo(function MessagesTimeline({
       updateSelectionActionState();
     });
   }, [updateSelectionActionState]);
+
+  const schedulePinnedSelectionMarkersUpdate = useCallback(() => {
+    if (pinnedSelectionMarkerFrameRef.current !== null) {
+      window.cancelAnimationFrame(pinnedSelectionMarkerFrameRef.current);
+    }
+    pinnedSelectionMarkerFrameRef.current = window.requestAnimationFrame(() => {
+      pinnedSelectionMarkerFrameRef.current = null;
+      updatePinnedSelectionMarkers();
+    });
+  }, [updatePinnedSelectionMarkers]);
+
+  const schedulePinnedSelectionMarkersAfterScroll = useCallback(() => {
+    if (pinnedSelectionMarkerScrollTimeoutRef.current !== null) {
+      window.clearTimeout(pinnedSelectionMarkerScrollTimeoutRef.current);
+    }
+    isTimelineScrollingRef.current = true;
+    hidePinnedSelectionMarkers();
+    pinnedSelectionMarkerScrollTimeoutRef.current = window.setTimeout(() => {
+      pinnedSelectionMarkerScrollTimeoutRef.current = null;
+      isTimelineScrollingRef.current = false;
+      schedulePinnedSelectionMarkersUpdate();
+    }, CHAT_PIN_MARKER_SCROLL_SETTLE_MS);
+  }, [hidePinnedSelectionMarkers, schedulePinnedSelectionMarkersUpdate]);
 
   useLayoutEffect(() => {
     const timelineRoot = timelineRootRef.current;
@@ -4906,12 +5218,17 @@ const MessagesTimeline = memo(function MessagesTimeline({
     const handlePointerUp = () => {
       scheduleSelectionActionUpdate();
     };
-    const handleViewportChange = () => {
+    const handleResize = () => {
       scheduleSelectionActionUpdate();
+      schedulePinnedSelectionMarkersUpdate();
+    };
+    const handleScroll = () => {
+      scheduleSelectionActionUpdate();
+      schedulePinnedSelectionMarkersAfterScroll();
     };
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target instanceof Element ? event.target : null;
-      if (target?.closest('[data-chat-selection-action="ask"]')) {
+      if (target?.closest("[data-chat-selection-action]")) {
         return;
       }
       selectionActionPointerDownRef.current = false;
@@ -4921,22 +5238,34 @@ const MessagesTimeline = memo(function MessagesTimeline({
     document.addEventListener("mouseup", handlePointerUp);
     document.addEventListener("touchend", handlePointerUp);
     document.addEventListener("pointerdown", handlePointerDown, true);
-    window.addEventListener("scroll", handleViewportChange, true);
-    window.addEventListener("resize", handleViewportChange);
+    window.addEventListener("scroll", handleScroll, true);
+    window.addEventListener("resize", handleResize);
 
     return () => {
       document.removeEventListener("selectionchange", handleSelectionChange);
       document.removeEventListener("mouseup", handlePointerUp);
       document.removeEventListener("touchend", handlePointerUp);
       document.removeEventListener("pointerdown", handlePointerDown, true);
-      window.removeEventListener("scroll", handleViewportChange, true);
-      window.removeEventListener("resize", handleViewportChange);
+      window.removeEventListener("scroll", handleScroll, true);
+      window.removeEventListener("resize", handleResize);
       if (selectionActionFrameRef.current !== null) {
         window.cancelAnimationFrame(selectionActionFrameRef.current);
         selectionActionFrameRef.current = null;
       }
+      if (pinnedSelectionMarkerFrameRef.current !== null) {
+        window.cancelAnimationFrame(pinnedSelectionMarkerFrameRef.current);
+        pinnedSelectionMarkerFrameRef.current = null;
+      }
+      if (pinnedSelectionMarkerScrollTimeoutRef.current !== null) {
+        window.clearTimeout(pinnedSelectionMarkerScrollTimeoutRef.current);
+        pinnedSelectionMarkerScrollTimeoutRef.current = null;
+      }
     };
-  }, [scheduleSelectionActionUpdate]);
+  }, [
+    schedulePinnedSelectionMarkersAfterScroll,
+    schedulePinnedSelectionMarkersUpdate,
+    scheduleSelectionActionUpdate,
+  ]);
 
   const rows = useMemo<TimelineRow[]>(() => {
     const nextRows: TimelineRow[] = [];
@@ -5000,7 +5329,12 @@ const MessagesTimeline = memo(function MessagesTimeline({
 
   useEffect(() => {
     scheduleSelectionActionUpdate();
-  }, [scheduleSelectionActionUpdate, timelineEntries]);
+    schedulePinnedSelectionMarkersUpdate();
+  }, [schedulePinnedSelectionMarkersUpdate, scheduleSelectionActionUpdate, timelineEntries]);
+
+  useEffect(() => {
+    schedulePinnedSelectionMarkersUpdate();
+  }, [pinnedSelections, schedulePinnedSelectionMarkersUpdate]);
 
   const firstUnvirtualizedRowIndex = useMemo(() => {
     const firstTailRowIndex = Math.max(rows.length - ALWAYS_UNVIRTUALIZED_TAIL_ROWS, 0);
@@ -5093,6 +5427,76 @@ const MessagesTimeline = memo(function MessagesTimeline({
       }
     };
   }, []);
+
+  useEffect(() => {
+    if (!pendingPinnedSelectionJumpId) {
+      return;
+    }
+    const selection = pinnedSelections.find((entry) => entry.id === pendingPinnedSelectionJumpId);
+    if (!selection) {
+      onPinnedSelectionJumpHandled(pendingPinnedSelectionJumpId);
+      return;
+    }
+
+    const rowIndex = rows.findIndex((row) => {
+      if (row.kind === "message" && row.message.role === "assistant") {
+        return selection.sourceKind === "assistant-message" && row.message.id === selection.sourceId;
+      }
+      if (row.kind === "proposed-plan") {
+        return selection.sourceKind === "proposed-plan" && row.proposedPlan.id === selection.sourceId;
+      }
+      return false;
+    });
+
+    if (rowIndex >= 0) {
+      if (rowIndex < virtualizedRowCount) {
+        rowVirtualizer.scrollToIndex(rowIndex, { align: "center" });
+      } else {
+        const rowElement = timelineRootRef.current?.querySelector<HTMLElement>(
+          `[data-message-id="${selection.sourceId}"], [data-proposed-plan-id="${selection.sourceId}"]`,
+        );
+        rowElement?.scrollIntoView({ block: "center", behavior: "smooth" });
+      }
+    }
+
+    let attempts = 0;
+    let frame: number | null = null;
+
+    const tryScrollToSelection = () => {
+      attempts += 1;
+      const selector = `[${CHAT_SELECTION_SOURCE_KIND_ATTRIBUTE}="${selection.sourceKind}"][${CHAT_SELECTION_SOURCE_ID_ATTRIBUTE}="${selection.sourceId}"]`;
+      const region = document.querySelector<HTMLElement>(selector);
+      const range =
+        region &&
+        reconstructRangeFromOffsets(region, selection.plainTextStart, selection.plainTextEnd);
+      if (range && scrollContainer && scrollRangeIntoContainerView(range, scrollContainer)) {
+        onPinnedSelectionJumpHandled(selection.id);
+        return;
+      }
+      if (attempts >= 8) {
+        onPinnedSelectionJumpHandled(selection.id);
+        return;
+      }
+      frame = window.requestAnimationFrame(tryScrollToSelection);
+    };
+
+    frame = window.requestAnimationFrame(tryScrollToSelection);
+
+    return () => {
+      if (frame !== null) {
+        window.cancelAnimationFrame(frame);
+      }
+    };
+  }, [
+    scrollContainer,
+    onPinnedSelectionJumpHandled,
+    pendingPinnedSelectionJumpId,
+    pinnedSelections,
+    rowVirtualizer,
+    rows,
+    virtualizedRowCount,
+  ]);
+
   const onSelectionActionPointerDown = useCallback(
     (event: ReactPointerEvent<HTMLButtonElement>) => {
       selectionActionPointerDownRef.current = true;
@@ -5101,39 +5505,105 @@ const MessagesTimeline = memo(function MessagesTimeline({
     },
     [],
   );
-  const onSelectionActionClick = useCallback(() => {
-    const selectedText = selectionActionStateRef.current?.selectedText;
+  const clearNativeTextSelection = useCallback(() => {
     selectionActionPointerDownRef.current = false;
     clearSelectionAction();
     window.getSelection()?.removeAllRanges();
+  }, [clearSelectionAction]);
+
+  const onSelectionActionQuoteClick = useCallback(() => {
+    const selectedText = selectionActionStateRef.current?.selectedText;
+    clearNativeTextSelection();
     if (!selectedText) {
       return;
     }
     onAskAboutSelectedText(selectedText);
-  }, [clearSelectionAction, onAskAboutSelectedText]);
+  }, [clearNativeTextSelection, onAskAboutSelectedText]);
+
+  const onSelectionActionPinClick = useCallback(() => {
+    const selection = selectionActionStateRef.current;
+    clearNativeTextSelection();
+    if (!selection) {
+      return;
+    }
+    onPinSelectedText({
+      sourceKind: selection.sourceKind,
+      sourceId: selection.sourceId,
+      selectedText: selection.selectedText,
+      plainTextStart: selection.plainTextStart,
+      plainTextEnd: selection.plainTextEnd,
+    });
+  }, [clearNativeTextSelection, onPinSelectedText]);
 
   const selectionActionOverlay =
     selectionActionState && typeof document !== "undefined"
       ? createPortal(
           <div className="pointer-events-none fixed inset-0 z-50">
-            <Button
-              aria-label={CHAT_SELECTION_ACTION_LABEL}
-              data-chat-selection-action="ask"
-              variant="secondary"
-              size="xs"
-              className="pointer-events-auto fixed h-9 rounded-full border border-border/80 bg-card/95 px-3 text-foreground shadow-lg/20 backdrop-blur-sm"
+            <div
+              className="pointer-events-auto fixed flex h-9 items-center gap-1 rounded-full border border-border/80 bg-card/95 px-1.5 text-foreground shadow-lg/20 backdrop-blur-sm"
               style={{
                 left: `${selectionActionState.left}px`,
                 top: `${selectionActionState.top}px`,
               }}
-              onPointerDown={onSelectionActionPointerDown}
-              onClick={onSelectionActionClick}
             >
-              <span aria-hidden="true" className="font-serif text-sm leading-none opacity-80">
-                "
-              </span>
-              <span>Ask</span>
-            </Button>
+              <Button
+                aria-label={CHAT_SELECTION_QUOTE_ACTION_LABEL}
+                data-chat-selection-action="quote"
+                variant="ghost"
+                size="icon-xs"
+                className="size-7 rounded-full"
+                onPointerDown={onSelectionActionPointerDown}
+                onClick={onSelectionActionQuoteClick}
+              >
+                <span aria-hidden="true" className="font-serif text-sm leading-none opacity-80">
+                  "
+                </span>
+              </Button>
+              <Button
+                aria-label={CHAT_SELECTION_PIN_ACTION_LABEL}
+                data-chat-selection-action="pin"
+                variant="ghost"
+                size="icon-xs"
+                className="size-7 rounded-full"
+                onPointerDown={onSelectionActionPointerDown}
+                onClick={onSelectionActionPinClick}
+              >
+                <PinIcon className="size-3.5" />
+              </Button>
+            </div>
+          </div>,
+          document.body,
+        )
+      : null;
+
+  const pinnedSelectionMarkersOverlay =
+    pinnedSelectionMarkers.length > 0 && typeof document !== "undefined"
+      ? createPortal(
+          <div className="pointer-events-none fixed inset-0 z-40">
+            {pinnedSelectionMarkers.map((marker, index) => (
+              <Tooltip key={`pinned-selection-marker:${marker.id}`}>
+                <TooltipTrigger
+                  render={
+                    <button
+                      type="button"
+                      data-chat-selection-ignore="true"
+                      className="pointer-events-auto fixed inline-flex size-6 items-center justify-center rounded-full border border-border/70 bg-card/95 text-[10px] font-medium text-foreground shadow-md/20 backdrop-blur-sm transition-colors hover:bg-card"
+                      style={{
+                        left: `${marker.left}px`,
+                        top: `${marker.top}px`,
+                      }}
+                      onClick={() => onRemovePinnedSelection(marker.id)}
+                      aria-label={`Remove pinned passage ${index + 1}`}
+                    >
+                      <PinIcon className="size-3" />
+                    </button>
+                  }
+                />
+                <TooltipPopup side="top" className="max-w-64 whitespace-normal leading-tight">
+                  {marker.selectedText}
+                </TooltipPopup>
+              </Tooltip>
+            ))}
           </div>,
           document.body,
         )
@@ -5157,6 +5627,7 @@ const MessagesTimeline = memo(function MessagesTimeline({
       data-timeline-row-kind={row.kind}
       data-message-id={row.kind === "message" ? row.message.id : undefined}
       data-message-role={row.kind === "message" ? row.message.role : undefined}
+      data-proposed-plan-id={row.kind === "proposed-plan" ? row.proposedPlan.id : undefined}
     >
       {row.kind === "work" &&
         (() => {
@@ -5313,7 +5784,13 @@ const MessagesTimeline = memo(function MessagesTimeline({
                 </div>
               )}
               <div className="min-w-0 px-1 py-0.5">
-                <div {...{ [CHAT_SELECTION_REGION_ATTRIBUTE]: CHAT_SELECTION_REGION_VALUE }}>
+                <div
+                  {...{
+                    [CHAT_SELECTION_REGION_ATTRIBUTE]: CHAT_SELECTION_REGION_VALUE,
+                    [CHAT_SELECTION_SOURCE_KIND_ATTRIBUTE]: "assistant-message",
+                    [CHAT_SELECTION_SOURCE_ID_ATTRIBUTE]: row.message.id,
+                  }}
+                >
                   <ChatMarkdown
                     text={messageText}
                     cwd={markdownCwd}
@@ -5392,6 +5869,7 @@ const MessagesTimeline = memo(function MessagesTimeline({
       {row.kind === "proposed-plan" && (
         <div className="min-w-0 px-1 py-0.5">
           <ProposedPlanCard
+            sourceId={row.proposedPlan.id}
             planMarkdown={row.proposedPlan.planMarkdown}
             cwd={markdownCwd}
             workspaceRoot={workspaceRoot}
@@ -5455,6 +5933,7 @@ const MessagesTimeline = memo(function MessagesTimeline({
         <div key={`non-virtual-row:${row.id}`}>{renderRowContent(row)}</div>
       ))}
       {selectionActionOverlay}
+      {pinnedSelectionMarkersOverlay}
     </div>
   );
 });

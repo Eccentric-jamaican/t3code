@@ -33,9 +33,20 @@ export interface ComposerImageAttachment extends Omit<ChatImageAttachment, "prev
   file: File;
 }
 
+export interface PinnedSelectionDraft {
+  id: string;
+  sourceKind: "assistant-message" | "proposed-plan";
+  sourceId: string;
+  selectedText: string;
+  plainTextStart: number;
+  plainTextEnd: number;
+  createdAt: string;
+}
+
 interface PersistedComposerThreadDraftState {
   prompt: string;
   attachments: PersistedComposerImageAttachment[];
+  pinnedSelections?: PinnedSelectionDraft[];
   provider?: ProviderKind | null;
   model?: string | null;
   runtimeMode?: RuntimeMode | null;
@@ -66,6 +77,7 @@ interface ComposerThreadDraftState {
   images: ComposerImageAttachment[];
   nonPersistedImageIds: string[];
   persistedAttachments: PersistedComposerImageAttachment[];
+  pinnedSelections: PinnedSelectionDraft[];
   provider: ProviderKind | null;
   model: string | null;
   runtimeMode: RuntimeMode | null;
@@ -134,6 +146,9 @@ interface ComposerDraftStoreState {
   addImage: (threadId: ThreadId, image: ComposerImageAttachment) => void;
   addImages: (threadId: ThreadId, images: ComposerImageAttachment[]) => void;
   removeImage: (threadId: ThreadId, imageId: string) => void;
+  addPinnedSelection: (threadId: ThreadId, selection: PinnedSelectionDraft) => void;
+  removePinnedSelection: (threadId: ThreadId, pinnedSelectionId: string) => void;
+  clearPinnedSelections: (threadId: ThreadId) => void;
   clearPersistedAttachments: (threadId: ThreadId) => void;
   syncPersistedAttachments: (
     threadId: ThreadId,
@@ -152,14 +167,17 @@ const EMPTY_PERSISTED_DRAFT_STORE_STATE: PersistedComposerDraftStoreState = {
 const EMPTY_IMAGES: ComposerImageAttachment[] = [];
 const EMPTY_IDS: string[] = [];
 const EMPTY_PERSISTED_ATTACHMENTS: PersistedComposerImageAttachment[] = [];
+const EMPTY_PINNED_SELECTIONS: PinnedSelectionDraft[] = [];
 Object.freeze(EMPTY_IMAGES);
 Object.freeze(EMPTY_IDS);
 Object.freeze(EMPTY_PERSISTED_ATTACHMENTS);
+Object.freeze(EMPTY_PINNED_SELECTIONS);
 const EMPTY_THREAD_DRAFT = Object.freeze({
   prompt: "",
   images: EMPTY_IMAGES,
   nonPersistedImageIds: EMPTY_IDS,
   persistedAttachments: EMPTY_PERSISTED_ATTACHMENTS,
+  pinnedSelections: EMPTY_PINNED_SELECTIONS,
   provider: null,
   model: null,
   runtimeMode: null,
@@ -178,6 +196,7 @@ function createEmptyThreadDraft(): ComposerThreadDraftState {
     images: [],
     nonPersistedImageIds: [],
     persistedAttachments: [],
+    pinnedSelections: [],
     provider: null,
     model: null,
     runtimeMode: null,
@@ -198,6 +217,7 @@ function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
     draft.prompt.length === 0 &&
     draft.images.length === 0 &&
     draft.persistedAttachments.length === 0 &&
+    draft.pinnedSelections.length === 0 &&
     draft.provider === null &&
     draft.model === null &&
     draft.runtimeMode === null &&
@@ -249,6 +269,46 @@ function normalizePersistedAttachment(value: unknown): PersistedComposerImageAtt
     mimeType,
     sizeBytes,
     dataUrl,
+  };
+}
+
+function normalizePinnedSelectionDraft(value: unknown): PinnedSelectionDraft | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const candidate = value as Record<string, unknown>;
+  const id = candidate.id;
+  const sourceKind = candidate.sourceKind;
+  const sourceId = candidate.sourceId;
+  const selectedText = candidate.selectedText;
+  const plainTextStart = candidate.plainTextStart;
+  const plainTextEnd = candidate.plainTextEnd;
+  const createdAt = candidate.createdAt;
+  if (
+    typeof id !== "string" ||
+    (sourceKind !== "assistant-message" && sourceKind !== "proposed-plan") ||
+    typeof sourceId !== "string" ||
+    typeof selectedText !== "string" ||
+    typeof plainTextStart !== "number" ||
+    !Number.isFinite(plainTextStart) ||
+    typeof plainTextEnd !== "number" ||
+    !Number.isFinite(plainTextEnd) ||
+    plainTextStart < 0 ||
+    plainTextEnd <= plainTextStart ||
+    typeof createdAt !== "string" ||
+    id.length === 0 ||
+    sourceId.length === 0
+  ) {
+    return null;
+  }
+  return {
+    id,
+    sourceKind,
+    sourceId,
+    selectedText,
+    plainTextStart,
+    plainTextEnd,
+    createdAt,
   };
 }
 
@@ -366,6 +426,12 @@ function normalizePersistedComposerDraftState(value: unknown): PersistedComposer
           return normalized ? [normalized] : [];
         })
       : [];
+    const pinnedSelections = Array.isArray(draftCandidate.pinnedSelections)
+      ? draftCandidate.pinnedSelections.flatMap((entry) => {
+          const normalized = normalizePinnedSelectionDraft(entry);
+          return normalized ? [normalized] : [];
+        })
+      : [];
     const provider = normalizeProviderKind(draftCandidate.provider);
     const model =
       typeof draftCandidate.model === "string"
@@ -392,6 +458,7 @@ function normalizePersistedComposerDraftState(value: unknown): PersistedComposer
     if (
       prompt.length === 0 &&
       attachments.length === 0 &&
+      pinnedSelections.length === 0 &&
       !provider &&
       !model &&
       !runtimeMode &&
@@ -404,6 +471,7 @@ function normalizePersistedComposerDraftState(value: unknown): PersistedComposer
     nextDraftsByThreadId[threadId as ThreadId] = {
       prompt,
       attachments,
+      pinnedSelections,
       ...(provider ? { provider } : {}),
       ...(model ? { model } : {}),
       ...(runtimeMode ? { runtimeMode } : {}),
@@ -511,6 +579,7 @@ function toHydratedThreadDraft(
     images: hydrateImagesFromPersisted(persistedDraft.attachments),
     nonPersistedImageIds: [],
     persistedAttachments: persistedDraft.attachments,
+    pinnedSelections: persistedDraft.pinnedSelections ?? [],
     provider: persistedDraft.provider ?? null,
     model: persistedDraft.model ?? null,
     runtimeMode: persistedDraft.runtimeMode ?? null,
@@ -1027,6 +1096,76 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
           return { draftsByThreadId: nextDraftsByThreadId };
         });
       },
+      addPinnedSelection: (threadId, selection) => {
+        if (threadId.length === 0 || selection.id.length === 0) {
+          return;
+        }
+        set((state) => {
+          const existing = state.draftsByThreadId[threadId] ?? createEmptyThreadDraft();
+          if (existing.pinnedSelections.some((entry) => entry.id === selection.id)) {
+            return state;
+          }
+          return {
+            draftsByThreadId: {
+              ...state.draftsByThreadId,
+              [threadId]: {
+                ...existing,
+                pinnedSelections: [...existing.pinnedSelections, selection],
+              },
+            },
+          };
+        });
+      },
+      removePinnedSelection: (threadId, pinnedSelectionId) => {
+        if (threadId.length === 0 || pinnedSelectionId.length === 0) {
+          return;
+        }
+        set((state) => {
+          const current = state.draftsByThreadId[threadId];
+          if (!current) {
+            return state;
+          }
+          const nextPinnedSelections = current.pinnedSelections.filter(
+            (selection) => selection.id !== pinnedSelectionId,
+          );
+          if (nextPinnedSelections.length === current.pinnedSelections.length) {
+            return state;
+          }
+          const nextDraft: ComposerThreadDraftState = {
+            ...current,
+            pinnedSelections: nextPinnedSelections,
+          };
+          const nextDraftsByThreadId = { ...state.draftsByThreadId };
+          if (shouldRemoveDraft(nextDraft)) {
+            delete nextDraftsByThreadId[threadId];
+          } else {
+            nextDraftsByThreadId[threadId] = nextDraft;
+          }
+          return { draftsByThreadId: nextDraftsByThreadId };
+        });
+      },
+      clearPinnedSelections: (threadId) => {
+        if (threadId.length === 0) {
+          return;
+        }
+        set((state) => {
+          const current = state.draftsByThreadId[threadId];
+          if (!current || current.pinnedSelections.length === 0) {
+            return state;
+          }
+          const nextDraft: ComposerThreadDraftState = {
+            ...current,
+            pinnedSelections: [],
+          };
+          const nextDraftsByThreadId = { ...state.draftsByThreadId };
+          if (shouldRemoveDraft(nextDraft)) {
+            delete nextDraftsByThreadId[threadId];
+          } else {
+            nextDraftsByThreadId[threadId] = nextDraft;
+          }
+          return { draftsByThreadId: nextDraftsByThreadId };
+        });
+      },
       clearPersistedAttachments: (threadId) => {
         if (threadId.length === 0) {
           return;
@@ -1179,6 +1318,7 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
           if (
             draft.prompt.length === 0 &&
             draft.persistedAttachments.length === 0 &&
+            draft.pinnedSelections.length === 0 &&
             draft.provider === null &&
             draft.model === null &&
             draft.runtimeMode === null &&
@@ -1192,6 +1332,9 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
             prompt: draft.prompt,
             attachments: draft.persistedAttachments,
           };
+          if (draft.pinnedSelections.length > 0) {
+            persistedDraft.pinnedSelections = draft.pinnedSelections;
+          }
           if (draft.model) {
             persistedDraft.model = draft.model;
           }

@@ -503,11 +503,12 @@ async function clearSelectedText(): Promise<void> {
   await waitForLayout();
 }
 
-async function waitForSelectionAskButton(): Promise<HTMLButtonElement> {
+async function waitForSelectionActionButton(
+  ariaLabel: "Quote selected text" | "Pin selected text",
+): Promise<HTMLButtonElement> {
   return waitForElement(
-    () =>
-      document.querySelector<HTMLButtonElement>('button[aria-label="Ask about selected text"]'),
-    "Unable to find selection ask button.",
+    () => document.querySelector<HTMLButtonElement>(`button[aria-label="${ariaLabel}"]`),
+    `Unable to find selection action button: ${ariaLabel}.`,
   );
 }
 
@@ -860,7 +861,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     },
   );
 
-  it("shows the selection action for assistant markdown and inserts the quoted text into the composer", async () => {
+  it("shows the quote selection action for assistant markdown and inserts the quoted text into the composer", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
       snapshot: createSelectionFeatureSnapshot(),
@@ -877,9 +878,9 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
       await selectTextInElement(assistantParagraph);
 
-      const askButton = await waitForSelectionAskButton();
-      askButton.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
-      askButton.click();
+      const quoteButton = await waitForSelectionActionButton("Quote selected text");
+      quoteButton.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+      quoteButton.click();
 
       await vi.waitFor(
         () => {
@@ -914,15 +915,14 @@ describe("ChatView timeline estimator parity (full app)", () => {
       await selectTextInElement(userMessage);
       await waitForLayout();
 
-      expect(
-        document.querySelector('button[aria-label="Ask about selected text"]'),
-      ).toBeNull();
+      expect(document.querySelector('button[aria-label="Quote selected text"]')).toBeNull();
+      expect(document.querySelector('button[aria-label="Pin selected text"]')).toBeNull();
     } finally {
       await mounted.cleanup();
     }
   });
 
-  it("shows the selection action for proposed plan markdown", async () => {
+  it("shows both selection actions for proposed plan markdown", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
       snapshot: createSelectionFeatureSnapshot(),
@@ -938,17 +938,103 @@ describe("ChatView timeline estimator parity (full app)", () => {
       );
 
       await selectTextInElement(planHeading);
-      await waitForSelectionAskButton();
+      await waitForSelectionActionButton("Quote selected text");
+      await waitForSelectionActionButton("Pin selected text");
       await clearSelectedText();
 
       await vi.waitFor(
         () => {
-          expect(
-            document.querySelector('button[aria-label="Ask about selected text"]'),
-          ).toBeNull();
+          expect(document.querySelector('button[aria-label="Quote selected text"]')).toBeNull();
+          expect(document.querySelector('button[aria-label="Pin selected text"]')).toBeNull();
         },
         { timeout: 8_000, interval: 16 },
       );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("pins multiple passages, keeps them after send, and sends only the typed prompt", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSelectionFeatureSnapshot(),
+    });
+
+    try {
+      const assistantParagraph = await waitForElement(
+        () =>
+          document.querySelector<HTMLElement>(
+            '[data-message-role="assistant"] [data-chat-selection-region="assistant-output"] p',
+          ),
+        "Unable to find assistant markdown paragraph.",
+      );
+      await selectTextInElement(assistantParagraph);
+      const pinButton = await waitForSelectionActionButton("Pin selected text");
+      pinButton.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+      pinButton.click();
+
+      const planHeading = await waitForElement(
+        () =>
+          document.querySelector<HTMLElement>(
+            '[data-timeline-row-kind="proposed-plan"] [data-chat-selection-region="assistant-output"] h1',
+          ),
+        "Unable to find proposed plan heading.",
+      );
+      await selectTextInElement(planHeading);
+      const secondPinButton = await waitForSelectionActionButton("Pin selected text");
+      secondPinButton.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+      secondPinButton.click();
+
+      await vi.waitFor(
+        () => {
+          expect(
+            Array.from(document.querySelectorAll("button")).some((button) =>
+              button.textContent?.includes("A daemon is a background process"),
+            ),
+          ).toBe(true);
+          expect(
+            Array.from(document.querySelectorAll("button")).some((button) =>
+              button.textContent?.includes("Plan heading"),
+            ),
+          ).toBe(true);
+          expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.pinnedSelections).toHaveLength(
+            2,
+          );
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, "Can you clarify these points?");
+      await waitForLayout();
+
+      const sendButton = await waitForElement(
+        () =>
+          document.querySelector<HTMLButtonElement>('button[aria-label="Send message"]'),
+        "Unable to find send button.",
+      );
+      sendButton.click();
+
+      await vi.waitFor(
+        () => {
+          const turnStartRequest = wsRequests.findLast(
+            (request) => request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand,
+          ) as
+            | { command?: { type?: string; message?: { text?: string } } }
+            | undefined;
+          expect(turnStartRequest?.command?.type).toBe("thread.turn.start");
+          expect(turnStartRequest?.command?.message?.text).toBe("Can you clarify these points?");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.pinnedSelections ?? []).toHaveLength(
+        2,
+      );
+      expect(
+        Array.from(document.querySelectorAll("button")).some((button) =>
+          button.textContent?.includes("A daemon is a background process"),
+        ),
+      ).toBe(true);
     } finally {
       await mounted.cleanup();
     }

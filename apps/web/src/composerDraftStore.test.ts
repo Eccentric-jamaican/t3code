@@ -1,7 +1,11 @@
 import { ProjectId, ThreadId } from "@t3tools/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { type ComposerImageAttachment, useComposerDraftStore } from "./composerDraftStore";
+import {
+  type ComposerImageAttachment,
+  type PinnedSelectionDraft,
+  useComposerDraftStore,
+} from "./composerDraftStore";
 
 function makeImage(input: {
   id: string;
@@ -27,6 +31,20 @@ function makeImage(input: {
     sizeBytes: file.size,
     previewUrl: input.previewUrl,
     file,
+  };
+}
+
+function makePinnedSelection(
+  input: Partial<PinnedSelectionDraft> & Pick<PinnedSelectionDraft, "id">,
+): PinnedSelectionDraft {
+  return {
+    id: input.id,
+    sourceKind: input.sourceKind ?? "assistant-message",
+    sourceId: input.sourceId ?? "message-1",
+    selectedText: input.selectedText ?? "Pinned passage",
+    plainTextStart: input.plainTextStart ?? 0,
+    plainTextEnd: input.plainTextEnd ?? 12,
+    createdAt: input.createdAt ?? "2026-03-10T12:00:00.000Z",
   };
 }
 
@@ -151,6 +169,56 @@ describe("composerDraftStore clearComposerContent", () => {
     const draft = useComposerDraftStore.getState().draftsByThreadId[threadId];
     expect(draft).toBeUndefined();
     expect(revokeSpy).not.toHaveBeenCalledWith("blob:optimistic");
+  });
+
+  it("preserves pinned selections when clearing prompt and attachments", () => {
+    const store = useComposerDraftStore.getState();
+    store.setPrompt(threadId, "hello");
+    const pinnedSelection = makePinnedSelection({ id: "pin-clear" });
+    store.addPinnedSelection(threadId, pinnedSelection);
+
+    store.clearComposerContent(threadId);
+
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.pinnedSelections).toEqual([
+      pinnedSelection,
+    ]);
+  });
+});
+
+describe("composerDraftStore pinned selections", () => {
+  const threadId = ThreadId.makeUnsafe("thread-pins");
+
+  beforeEach(() => {
+    useComposerDraftStore.setState({
+      draftsByThreadId: {},
+      draftThreadsByThreadId: {},
+      projectDraftThreadIdByProjectId: {},
+    });
+  });
+
+  it("retains drafts that contain only pinned selections", () => {
+    const store = useComposerDraftStore.getState();
+    store.addPinnedSelection(threadId, makePinnedSelection({ id: "pin-only" }));
+
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.pinnedSelections).toEqual([
+      makePinnedSelection({ id: "pin-only" }),
+    ]);
+  });
+
+  it("can remove and clear pinned selections independently", () => {
+    const store = useComposerDraftStore.getState();
+    store.addPinnedSelection(threadId, makePinnedSelection({ id: "pin-1" }));
+    store.addPinnedSelection(threadId, makePinnedSelection({ id: "pin-2", plainTextStart: 14 }));
+
+    store.removePinnedSelection(threadId, "pin-1");
+    expect(
+      useComposerDraftStore.getState().draftsByThreadId[threadId]?.pinnedSelections.map(
+        (selection) => selection.id,
+      ),
+    ).toEqual(["pin-2"]);
+
+    store.clearPinnedSelections(threadId);
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toBeUndefined();
   });
 });
 
