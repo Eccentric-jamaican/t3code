@@ -272,6 +272,37 @@ label:has(> select#reasoning-effort) select {
   margin-top: 0.25rem;
 }
 
+.chat-markdown-user p,
+.chat-markdown-user ul,
+.chat-markdown-user ol,
+.chat-markdown-user blockquote,
+.chat-markdown-user pre,
+.chat-markdown-user table {
+  margin: 0.45rem 0;
+}
+
+.chat-markdown-user a {
+  color: var(--foreground);
+  text-decoration-color: color-mix(in srgb, var(--foreground) 40%, transparent);
+}
+
+.chat-markdown-user blockquote {
+  color: color-mix(in srgb, var(--foreground) 80%, var(--muted-foreground));
+}
+
+.chat-markdown-user :not(pre) > code {
+  background: color-mix(in srgb, var(--background) 55%, var(--muted));
+}
+
+.chat-markdown-user pre {
+  background: color-mix(in srgb, var(--background) 72%, var(--muted));
+}
+
+.chat-markdown-user table {
+  display: block;
+  overflow-x: auto;
+}
+
 .chat-markdown a {
   color: var(--info-foreground);
   text-decoration: underline;

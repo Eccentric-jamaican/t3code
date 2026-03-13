@@ -30,6 +30,20 @@ const PROJECT_ID = "project-1" as ProjectId;
 const NOW_ISO = "2026-03-04T12:00:00.000Z";
 const BASE_TIME_MS = Date.parse(NOW_ISO);
 const ATTACHMENT_SVG = "<svg xmlns='http://www.w3.org/2000/svg' width='120' height='300'></svg>";
+const USER_MARKDOWN_TEXT = [
+  "# User heading",
+  "",
+  "- first item",
+  "- second item",
+  "",
+  "> quoted note",
+  "",
+  "Inline `code` sample",
+  "",
+  "```ts",
+  "const value = 1;",
+  "```",
+].join("\n");
 
 interface WsRequestEnvelope {
   id: string;
@@ -861,6 +875,81 @@ describe("ChatView timeline estimator parity (full app)", () => {
     },
   );
 
+  it("renders user-authored markdown and keeps actions in a detached footer row", async () => {
+    const targetMessageId = "msg-user-markdown-render" as MessageId;
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId,
+        targetText: USER_MARKDOWN_TEXT,
+      }),
+    });
+
+    try {
+      const row = await waitForElement(
+        () =>
+          document.querySelector<HTMLElement>(
+            `[data-message-id="${targetMessageId}"][data-message-role="user"]`,
+          ),
+        "Unable to find targeted markdown user row.",
+      );
+      const bubble = await waitForElement(
+        () => row.querySelector<HTMLElement>('[data-user-message-bubble="true"]'),
+        "Unable to find user message bubble.",
+      );
+      const footer = await waitForElement(
+        () => row.querySelector<HTMLElement>('[data-user-message-footer="true"]'),
+        "Unable to find user message footer.",
+      );
+
+      expect(bubble.querySelector("h1")?.textContent).toContain("User heading");
+      expect(bubble.querySelectorAll("li")).toHaveLength(2);
+      expect(bubble.querySelector("blockquote")?.textContent).toContain("quoted note");
+      expect(bubble.querySelector("p code")?.textContent).toBe("code");
+      expect(bubble.querySelector("pre code")?.textContent).toContain("const value = 1;");
+
+      const copyButton = row.querySelector<HTMLButtonElement>('button[title="Copy message"]');
+      expect(copyButton).toBeTruthy();
+      expect(footer.contains(copyButton)).toBe(true);
+      expect(bubble.contains(copyButton)).toBe(false);
+      expect(footer.previousElementSibling).toBe(bubble);
+      expect(footer.querySelector("p")?.textContent?.trim().length).toBeGreaterThan(0);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps markdown-heavy user rows measurable in the virtualized region", async () => {
+    const targetMessageId = "msg-user-target-markdown-heavy" as MessageId;
+    const userText = `${USER_MARKDOWN_TEXT}\n\n${"x".repeat(2_000)}`;
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId,
+        targetText: userText,
+      }),
+    });
+
+    try {
+      const { measuredRowHeightPx, renderedInVirtualizedRegion } =
+        await mounted.measureUserRow(targetMessageId);
+
+      expect(renderedInVirtualizedRegion).toBe(true);
+      expect(measuredRowHeightPx).toBeGreaterThan(0);
+
+      const heading = await waitForElement(
+        () =>
+          document.querySelector<HTMLElement>(
+            `[data-message-id="${targetMessageId}"][data-message-role="user"] [data-user-message-bubble="true"] h1`,
+          ),
+        "Unable to find markdown heading in the heavy user row.",
+      );
+      expect(heading.textContent).toContain("User heading");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("shows the quote selection action for assistant markdown and inserts the quoted text into the composer", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
@@ -901,14 +990,21 @@ describe("ChatView timeline estimator parity (full app)", () => {
   });
 
   it("does not show the selection action for user-authored messages", async () => {
+    const targetMessageId = "msg-user-markdown-selection" as MessageId;
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
-      snapshot: createSelectionFeatureSnapshot(),
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId,
+        targetText: USER_MARKDOWN_TEXT,
+      }),
     });
 
     try {
       const userMessage = await waitForElement(
-        () => document.querySelector<HTMLElement>('[data-message-role="user"] pre'),
+        () =>
+          document.querySelector<HTMLElement>(
+            `[data-message-id="${targetMessageId}"][data-message-role="user"] [data-user-message-bubble="true"] h1`,
+          ),
         "Unable to find user message text.",
       );
 
