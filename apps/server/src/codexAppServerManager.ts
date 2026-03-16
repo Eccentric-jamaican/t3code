@@ -1,7 +1,5 @@
-import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import readline from "node:readline";
 
 import {
   ApprovalRequestId,
@@ -21,15 +19,11 @@ import {
 } from "@t3tools/contracts";
 import { normalizeModelSlug } from "@t3tools/shared/model";
 import { Effect, ServiceMap } from "effect";
-
-type PendingRequestKey = string;
-
-interface PendingRequest {
-  method: string;
-  timeout: ReturnType<typeof setTimeout>;
-  resolve: (value: unknown) => void;
-  reject: (error: Error) => void;
-}
+import {
+  CodexAppServerTransport,
+  type JsonRpcNotification,
+  type JsonRpcRequest,
+} from "./codexAppServerTransport";
 
 interface PendingApprovalRequest {
   requestId: ApprovalRequestId;
@@ -59,35 +53,9 @@ interface CodexUserInputAnswer {
 interface CodexSessionContext {
   session: ProviderSession;
   account: CodexAccountSnapshot;
-  child: ChildProcessWithoutNullStreams;
-  output: readline.Interface;
-  pending: Map<PendingRequestKey, PendingRequest>;
+  transport: CodexAppServerTransport;
   pendingApprovals: Map<ApprovalRequestId, PendingApprovalRequest>;
   pendingUserInputs: Map<ApprovalRequestId, PendingUserInputRequest>;
-  nextRequestId: number;
-  stopping: boolean;
-}
-
-interface JsonRpcError {
-  code?: number;
-  message?: string;
-}
-
-interface JsonRpcRequest {
-  id: string | number;
-  method: string;
-  params?: unknown;
-}
-
-interface JsonRpcResponse {
-  id: string | number;
-  result?: unknown;
-  error?: JsonRpcError;
-}
-
-interface JsonRpcNotification {
-  method: string;
-  params?: unknown;
 }
 
 type CodexPlanType =
@@ -360,23 +328,6 @@ export function resolveCodexModelForAccount(
   return CODEX_DEFAULT_MODEL;
 }
 
-/**
- * On Windows with `shell: true`, `child.kill()` only terminates the `cmd.exe`
- * wrapper, leaving the actual command running. Use `taskkill /T` to kill the
- * entire process tree instead.
- */
-function killChildTree(child: ChildProcessWithoutNullStreams): void {
-  if (process.platform === "win32" && child.pid !== undefined) {
-    try {
-      spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore" });
-      return;
-    } catch {
-      // fallback to direct kill
-    }
-  }
-  child.kill();
-}
-
 export function normalizeCodexModelSlug(
   model: string | undefined | null,
   preferredId?: string,
@@ -533,18 +484,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       };
 
       const codexOptions = readCodexProviderOptions(input);
-      const codexBinaryPath = codexOptions.binaryPath ?? "codex";
-      const codexHomePath = codexOptions.homePath;
-      const child = spawn(codexBinaryPath, ["app-server"], {
+      const transport = new CodexAppServerTransport({
         cwd: resolvedCwd,
-        env: {
-          ...process.env,
-          ...(codexHomePath ? { CODEX_HOME: codexHomePath } : {}),
-        },
-        stdio: ["pipe", "pipe", "pipe"],
-        shell: process.platform === "win32",
+        ...(codexOptions.binaryPath ? { binaryPath: codexOptions.binaryPath } : {}),
+        ...(codexOptions.homePath ? { homePath: codexOptions.homePath } : {}),
       });
-      const output = readline.createInterface({ input: child.stdout });
 
       context = {
         session,
@@ -553,13 +497,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
           planType: null,
           sparkEnabled: true,
         },
-        child,
-        output,
-        pending: new Map(),
+        transport,
         pendingApprovals: new Map(),
         pendingUserInputs: new Map(),
-        nextRequestId: 1,
-        stopping: false,
       };
 
       this.sessions.set(threadId, context);
@@ -569,7 +509,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
       await this.sendRequest(context, "initialize", buildCodexInitializeParams());
 
-      this.writeMessage(context, { method: "initialized" });
+      context.transport.notify("initialized");
       try {
         const modelListResponse = await this.sendRequest(context, "model/list", {});
         console.log("codex model/list response", modelListResponse);
@@ -895,8 +835,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
 
     context.pendingApprovals.delete(requestId);
-    this.writeMessage(context, {
-      id: pendingRequest.jsonRpcId,
+    context.transport.respond(pendingRequest.jsonRpcId, {
       result: {
         decision,
       },
@@ -934,8 +873,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
     context.pendingUserInputs.delete(requestId);
     const codexAnswers = toCodexUserInputAnswers(answers);
-    this.writeMessage(context, {
-      id: pendingRequest.jsonRpcId,
+    context.transport.respond(pendingRequest.jsonRpcId, {
       result: {
         answers: codexAnswers,
       },
@@ -964,21 +902,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       return;
     }
 
-    context.stopping = true;
-
-    for (const pending of context.pending.values()) {
-      clearTimeout(pending.timeout);
-      pending.reject(new Error("Session stopped before request completed."));
-    }
-    context.pending.clear();
     context.pendingApprovals.clear();
     context.pendingUserInputs.clear();
-
-    context.output.close();
-
-    if (!context.child.killed) {
-      killChildTree(context.child);
-    }
+    context.transport.close();
 
     this.updateSession(context, {
       status: "closed",
@@ -1018,24 +944,16 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   }
 
   private attachProcessListeners(context: CodexSessionContext): void {
-    context.output.on("line", (line) => {
-      this.handleStdoutLine(context, line);
-    });
-
-    context.child.stderr.on("data", (chunk: Buffer) => {
-      const raw = chunk.toString();
-      const lines = raw.split(/\r?\n/g);
-      for (const rawLine of lines) {
-        const classified = classifyCodexStderrLine(rawLine);
-        if (!classified) {
-          continue;
-        }
-
-        this.emitErrorEvent(context, "process/stderr", classified.message);
+    context.transport.on("stderr", (line) => {
+      const classified = classifyCodexStderrLine(line);
+      if (!classified) {
+        return;
       }
+
+      this.emitErrorEvent(context, "process/stderr", classified.message);
     });
 
-    context.child.on("error", (error) => {
+    context.transport.on("error", (error) => {
       const message = error.message || "codex app-server process errored.";
       this.updateSession(context, {
         status: "error",
@@ -1044,8 +962,16 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       this.emitErrorEvent(context, "process/error", message);
     });
 
-    context.child.on("exit", (code, signal) => {
-      if (context.stopping) {
+    context.transport.on("request", (request) => {
+      this.handleServerRequest(context, request);
+    });
+
+    context.transport.on("notification", (notification) => {
+      this.handleServerNotification(context, notification);
+    });
+
+    context.transport.on("exit", ({ code, signal, expected }) => {
+      if (expected) {
         return;
       }
 
@@ -1058,50 +984,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       this.emitLifecycleEvent(context, "session/exited", message);
       this.sessions.delete(context.session.threadId);
     });
-  }
-
-  private handleStdoutLine(context: CodexSessionContext, line: string): void {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(line);
-    } catch {
-      this.emitErrorEvent(
-        context,
-        "protocol/parseError",
-        "Received invalid JSON from codex app-server.",
-      );
-      return;
-    }
-
-    if (!parsed || typeof parsed !== "object") {
-      this.emitErrorEvent(
-        context,
-        "protocol/invalidMessage",
-        "Received non-object protocol message.",
-      );
-      return;
-    }
-
-    if (this.isServerRequest(parsed)) {
-      this.handleServerRequest(context, parsed);
-      return;
-    }
-
-    if (this.isServerNotification(parsed)) {
-      this.handleServerNotification(context, parsed);
-      return;
-    }
-
-    if (this.isResponse(parsed)) {
-      this.handleResponse(context, parsed);
-      return;
-    }
-
-    this.emitErrorEvent(
-      context,
-      "protocol/unrecognizedMessage",
-      "Received protocol message in an unknown shape.",
-    );
   }
 
   private handleServerNotification(
@@ -1225,31 +1107,12 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       return;
     }
 
-    this.writeMessage(context, {
-      id: request.id,
+    context.transport.respond(request.id, {
       error: {
         code: -32601,
         message: `Unsupported server request: ${request.method}`,
       },
     });
-  }
-
-  private handleResponse(context: CodexSessionContext, response: JsonRpcResponse): void {
-    const key = String(response.id);
-    const pending = context.pending.get(key);
-    if (!pending) {
-      return;
-    }
-
-    clearTimeout(pending.timeout);
-    context.pending.delete(key);
-
-    if (response.error?.message) {
-      pending.reject(new Error(`${pending.method} failed: ${String(response.error.message)}`));
-      return;
-    }
-
-    pending.resolve(response.result);
   }
 
   private async sendRequest<TResponse>(
@@ -1258,38 +1121,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     params: unknown,
     timeoutMs = 20_000,
   ): Promise<TResponse> {
-    const id = context.nextRequestId;
-    context.nextRequestId += 1;
-
-    const result = await new Promise<unknown>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        context.pending.delete(String(id));
-        reject(new Error(`Timed out waiting for ${method}.`));
-      }, timeoutMs);
-
-      context.pending.set(String(id), {
-        method,
-        timeout,
-        resolve,
-        reject,
-      });
-      this.writeMessage(context, {
-        method,
-        id,
-        params,
-      });
-    });
-
-    return result as TResponse;
-  }
-
-  private writeMessage(context: CodexSessionContext, message: unknown): void {
-    const encoded = JSON.stringify(message);
-    if (!context.child.stdin.writable) {
-      throw new Error("Cannot write to codex app-server stdin.");
-    }
-
-    context.child.stdin.write(`${encoded}\n`);
+    return context.transport.request<TResponse>(method, params, timeoutMs);
   }
 
   private emitLifecycleEvent(context: CodexSessionContext, method: string, message: string): void {
@@ -1369,38 +1201,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       threadId: threadIdRaw,
       turns,
     };
-  }
-
-  private isServerRequest(value: unknown): value is JsonRpcRequest {
-    if (!value || typeof value !== "object") {
-      return false;
-    }
-
-    const candidate = value as Record<string, unknown>;
-    return (
-      typeof candidate.method === "string" &&
-      (typeof candidate.id === "string" || typeof candidate.id === "number")
-    );
-  }
-
-  private isServerNotification(value: unknown): value is JsonRpcNotification {
-    if (!value || typeof value !== "object") {
-      return false;
-    }
-
-    const candidate = value as Record<string, unknown>;
-    return typeof candidate.method === "string" && !("id" in candidate);
-  }
-
-  private isResponse(value: unknown): value is JsonRpcResponse {
-    if (!value || typeof value !== "object") {
-      return false;
-    }
-
-    const candidate = value as Record<string, unknown>;
-    const hasId = typeof candidate.id === "string" || typeof candidate.id === "number";
-    const hasMethod = typeof candidate.method === "string";
-    return hasId && !hasMethod;
   }
 
   private readRouteFields(params: unknown): {

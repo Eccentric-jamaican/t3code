@@ -5,6 +5,7 @@ import {
   type ContextMenuItem,
   type NativeApi,
   ServerConfigUpdatedPayload,
+  ServerProviderStateUpdatedPayload,
   TerminalEvent,
   WS_CHANNELS,
   WS_METHODS,
@@ -18,8 +19,12 @@ import { WsTransport } from "./wsTransport";
 let instance: { api: NativeApi; transport: WsTransport } | null = null;
 const welcomeListeners = new Set<(payload: WsWelcomePayload) => void>();
 const serverConfigUpdatedListeners = new Set<(payload: ServerConfigUpdatedPayload) => void>();
+const serverProviderStateUpdatedListeners = new Set<
+  (payload: ServerProviderStateUpdatedPayload) => void
+>();
 let lastWelcome: WsWelcomePayload | null = null;
 let lastServerConfigUpdated: ServerConfigUpdatedPayload | null = null;
+let lastServerProviderStateUpdated: ServerProviderStateUpdatedPayload | null = null;
 
 const decodeAndWarnOnFailure = <T>(
   schema: Schema.Schema<T> & { readonly DecodingServices: never },
@@ -81,6 +86,24 @@ export function onServerConfigUpdated(
   };
 }
 
+export function onServerProviderStateUpdated(
+  listener: (payload: ServerProviderStateUpdatedPayload) => void,
+): () => void {
+  serverProviderStateUpdatedListeners.add(listener);
+
+  if (lastServerProviderStateUpdated) {
+    try {
+      listener(lastServerProviderStateUpdated);
+    } catch {
+      // Swallow listener errors
+    }
+  }
+
+  return () => {
+    serverProviderStateUpdatedListeners.delete(listener);
+  };
+}
+
 export function createWsNativeApi(): NativeApi {
   if (instance) return instance.api;
 
@@ -105,6 +128,18 @@ export function createWsNativeApi(): NativeApi {
     if (!payload) return;
     lastServerConfigUpdated = payload;
     for (const listener of serverConfigUpdatedListeners) {
+      try {
+        listener(payload);
+      } catch {
+        // Swallow listener errors
+      }
+    }
+  });
+  transport.subscribe(WS_CHANNELS.serverProviderStateUpdated, (data) => {
+    const payload = decodeAndWarnOnFailure(ServerProviderStateUpdatedPayload, data);
+    if (!payload) return;
+    lastServerProviderStateUpdated = payload;
+    for (const listener of serverProviderStateUpdatedListeners) {
       try {
         listener(payload);
       } catch {
@@ -176,7 +211,7 @@ export function createWsNativeApi(): NativeApi {
         items: readonly ContextMenuItem<T>[],
         position?: { x: number; y: number },
       ): Promise<T | null> => {
-        if (window.desktopBridge) {
+        if (window.desktopBridge?.showContextMenu) {
           return window.desktopBridge.showContextMenu(items, position) as Promise<T | null>;
         }
         return showContextMenuFallback(items, position);
@@ -185,6 +220,10 @@ export function createWsNativeApi(): NativeApi {
     server: {
       getConfig: () => transport.request(WS_METHODS.serverGetConfig),
       upsertKeybinding: (input) => transport.request(WS_METHODS.serverUpsertKeybinding, input),
+      startProviderLogin: (input) => transport.request(WS_METHODS.serverStartProviderLogin, input),
+      cancelProviderLogin: (input) =>
+        transport.request(WS_METHODS.serverCancelProviderLogin, input),
+      logoutProvider: (input) => transport.request(WS_METHODS.serverLogoutProvider, input),
     },
     orchestration: {
       getSnapshot: () => transport.request(ORCHESTRATION_WS_METHODS.getSnapshot),

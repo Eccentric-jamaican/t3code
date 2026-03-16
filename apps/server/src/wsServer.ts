@@ -24,6 +24,8 @@ import {
   WS_CHANNELS,
   WS_METHODS,
   WebSocketRequest,
+  type ServerProviderAccountSummary,
+  type ServerProviderStatus,
   WsPush,
   WsResponse,
 } from "@t3tools/contracts";
@@ -54,6 +56,7 @@ import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnap
 import { OrchestrationReactor } from "./orchestration/Services/OrchestrationReactor";
 import { ProviderService } from "./provider/Services/ProviderService";
 import { ProviderHealth } from "./provider/Services/ProviderHealth";
+import { CodexAccountService } from "./provider/Services/CodexAccountService";
 import { CheckpointDiffQuery } from "./checkpointing/Services/CheckpointDiffQuery";
 import { clamp } from "effect/Number";
 import { Open, resolveAvailableEditors } from "./open";
@@ -194,6 +197,50 @@ function stripRequestTag<T extends { _tag: string }>(body: T) {
   return Struct.omit(body, ["_tag"]);
 }
 
+function toOptionalProviderMessage(message: string | null): string | undefined {
+  if (!message) {
+    return undefined;
+  }
+  const trimmed = message.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function overlayProviderStatuses(params: {
+  readonly providerStatuses: ReadonlyArray<ServerProviderStatus>;
+  readonly providerAccounts: ReadonlyArray<ServerProviderAccountSummary>;
+}): ReadonlyArray<ServerProviderStatus> {
+  return params.providerStatuses.map((providerStatus) => {
+    const accountSummary = params.providerAccounts.find(
+      (providerAccount) => providerAccount.provider === providerStatus.provider,
+    );
+    if (!accountSummary) {
+      return providerStatus;
+    }
+
+    let authStatus = providerStatus.authStatus;
+    if (accountSummary.state === "authenticated") {
+      authStatus = "authenticated";
+    } else if (accountSummary.state === "unauthenticated") {
+      authStatus = "unauthenticated";
+    }
+
+    if (accountSummary.state !== "error") {
+      return {
+        ...providerStatus,
+        authStatus,
+      };
+    }
+
+    const message = toOptionalProviderMessage(accountSummary.message);
+    return {
+      ...providerStatus,
+      status: providerStatus.available ? "warning" : providerStatus.status,
+      authStatus,
+      ...(message ? { message } : {}),
+    };
+  });
+}
+
 export type ServerCoreRuntimeServices =
   | OrchestrationEngineService
   | ProjectionSnapshotQuery
@@ -204,6 +251,7 @@ export type ServerCoreRuntimeServices =
 
 export type ServerRuntimeServices =
   | ServerCoreRuntimeServices
+  | CodexAccountService
   | GitManager
   | GitCore
   | TerminalManager
@@ -246,6 +294,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   const terminalManager = yield* TerminalManager;
   const keybindingsManager = yield* Keybindings;
   const providerHealth = yield* ProviderHealth;
+  const codexAccountService = yield* CodexAccountService;
   const git = yield* GitCore;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -285,6 +334,18 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
       }
     }
     logOutgoingPush(push, recipients);
+  });
+
+  const getProviderStateSnapshot = Effect.fnUntraced(function* () {
+    const providerAccounts = [yield* codexAccountService.getSnapshot()];
+    const providers = overlayProviderStatuses({
+      providerStatuses,
+      providerAccounts,
+    });
+    return {
+      providers,
+      providerAccounts,
+    };
   });
 
   const onTerminalEvent = Effect.fnUntraced(function* (event: TerminalEvent) {
@@ -593,6 +654,24 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
     }),
   ).pipe(Effect.forkIn(subscriptionsScope));
 
+  yield* Stream.runForEach(codexAccountService.updates, (providerAccount) =>
+    Effect.gen(function* () {
+      const providerAccounts = [providerAccount];
+      const providers = overlayProviderStatuses({
+        providerStatuses,
+        providerAccounts,
+      });
+      yield* broadcastPush({
+        type: "push",
+        channel: WS_CHANNELS.serverProviderStateUpdated,
+        data: {
+          providers,
+          providerAccounts,
+        },
+      });
+    }),
+  ).pipe(Effect.forkIn(subscriptionsScope));
+
   yield* Scope.provide(orchestrationReactor.start, subscriptionsScope);
 
   let welcomeBootstrapProjectId: ProjectId | undefined;
@@ -832,12 +911,14 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
 
       case WS_METHODS.serverGetConfig:
         const keybindingsConfig = yield* keybindingsManager.loadConfigState;
+        const providerState = yield* getProviderStateSnapshot();
         return {
           cwd,
           keybindingsConfigPath,
           keybindings: keybindingsConfig.keybindings,
           issues: keybindingsConfig.issues,
-          providers: providerStatuses,
+          providers: providerState.providers,
+          providerAccounts: providerState.providerAccounts,
           availableEditors,
         };
 
@@ -845,6 +926,37 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
         const body = stripRequestTag(request.body);
         const keybindingsConfig = yield* keybindingsManager.upsertKeybindingRule(body);
         return { keybindings: keybindingsConfig, issues: [] };
+      }
+
+      case WS_METHODS.serverStartProviderLogin: {
+        const body = stripRequestTag(request.body);
+        if (body.provider !== "codex" || body.type !== "chatgpt") {
+          return yield* new RouteRequestError({
+            message: "Unsupported provider login request.",
+          });
+        }
+        return yield* codexAccountService.startChatGptLogin();
+      }
+
+      case WS_METHODS.serverCancelProviderLogin: {
+        const body = stripRequestTag(request.body);
+        if (body.provider !== "codex") {
+          return yield* new RouteRequestError({
+            message: "Unsupported provider login cancel request.",
+          });
+        }
+        return yield* codexAccountService.cancelLogin(body.loginId);
+      }
+
+      case WS_METHODS.serverLogoutProvider: {
+        const body = stripRequestTag(request.body);
+        if (body.provider !== "codex") {
+          return yield* new RouteRequestError({
+            message: "Unsupported provider logout request.",
+          });
+        }
+        yield* codexAccountService.logout();
+        return {};
       }
 
       default: {

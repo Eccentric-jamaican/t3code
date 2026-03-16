@@ -31,6 +31,11 @@ import {
 import { KeybindingRule } from "./keybindings";
 import { ProjectSearchEntriesInput, ProjectWriteFileInput } from "./project";
 import { OpenInEditorInput } from "./editor";
+import {
+  ServerCancelProviderLoginInput,
+  ServerLogoutProviderInput,
+  ServerStartProviderLoginInput,
+} from "./server";
 
 // ── WebSocket RPC Method Names ───────────────────────────────────────
 
@@ -67,6 +72,9 @@ export const WS_METHODS = {
   // Server meta
   serverGetConfig: "server.getConfig",
   serverUpsertKeybinding: "server.upsertKeybinding",
+  serverStartProviderLogin: "server.startProviderLogin",
+  serverCancelProviderLogin: "server.cancelProviderLogin",
+  serverLogoutProvider: "server.logoutProvider",
 } as const;
 
 // ── Push Event Channels ──────────────────────────────────────────────
@@ -75,6 +83,7 @@ export const WS_CHANNELS = {
   terminalEvent: "terminal.event",
   serverWelcome: "server.welcome",
   serverConfigUpdated: "server.configUpdated",
+  serverProviderStateUpdated: "server.providerStateUpdated",
 } as const;
 
 // -- Tagged Union of all request body schemas ─────────────────────────
@@ -129,6 +138,9 @@ const WebSocketRequestBody = Schema.Union([
   // Server meta
   tagRequestBody(WS_METHODS.serverGetConfig, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverUpsertKeybinding, KeybindingRule),
+  tagRequestBody(WS_METHODS.serverStartProviderLogin, ServerStartProviderLoginInput),
+  tagRequestBody(WS_METHODS.serverCancelProviderLogin, ServerCancelProviderLoginInput),
+  tagRequestBody(WS_METHODS.serverLogoutProvider, ServerLogoutProviderInput),
 ]);
 
 export const WebSocketRequest = Schema.Struct({

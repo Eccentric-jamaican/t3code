@@ -48,6 +48,7 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
           turn_id,
           pending_message_id,
           assistant_message_id,
+          interaction_mode,
           state,
           requested_at,
           started_at,
@@ -62,6 +63,7 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
           ${row.turnId},
           ${row.pendingMessageId},
           ${row.assistantMessageId},
+          ${row.interactionMode},
           ${row.state},
           ${row.requestedAt},
           ${row.startedAt},
@@ -75,6 +77,7 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
         DO UPDATE SET
           pending_message_id = excluded.pending_message_id,
           assistant_message_id = excluded.assistant_message_id,
+          interaction_mode = excluded.interaction_mode,
           state = excluded.state,
           requested_at = excluded.requested_at,
           started_at = excluded.started_at,
@@ -107,6 +110,7 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
           turn_id,
           pending_message_id,
           assistant_message_id,
+          interaction_mode,
           state,
           requested_at,
           started_at,
@@ -121,6 +125,7 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
           NULL,
           ${row.messageId},
           NULL,
+          ${row.interactionMode},
           'pending',
           ${row.requestedAt},
           NULL,
@@ -141,6 +146,7 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
         SELECT
           thread_id AS "threadId",
           pending_message_id AS "messageId",
+          interaction_mode AS "interactionMode",
           requested_at AS "requestedAt"
         FROM projection_turns
         WHERE thread_id = ${threadId}
@@ -163,6 +169,7 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
           turn_id AS "turnId",
           pending_message_id AS "pendingMessageId",
           assistant_message_id AS "assistantMessageId",
+          interaction_mode AS "interactionMode",
           state,
           requested_at AS "requestedAt",
           started_at AS "startedAt",
@@ -194,6 +201,7 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
           turn_id AS "turnId",
           pending_message_id AS "pendingMessageId",
           assistant_message_id AS "assistantMessageId",
+          interaction_mode AS "interactionMode",
           state,
           requested_at AS "requestedAt",
           started_at AS "startedAt",

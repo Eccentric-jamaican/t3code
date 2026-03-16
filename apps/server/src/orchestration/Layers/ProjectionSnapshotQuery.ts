@@ -33,7 +33,11 @@ import { ProjectionThreadActivity } from "../../persistence/Services/ProjectionT
 import { ProjectionThreadMessage } from "../../persistence/Services/ProjectionThreadMessages.ts";
 import { ProjectionThreadProposedPlan } from "../../persistence/Services/ProjectionThreadProposedPlans.ts";
 import { ProjectionThreadSession } from "../../persistence/Services/ProjectionThreadSessions.ts";
-import { ProjectionThread } from "../../persistence/Services/ProjectionThreads.ts";
+import {
+  ProjectionThread,
+  ProjectionThreadDbRow,
+  normalizeProjectionThreadDbRow,
+} from "../../persistence/Services/ProjectionThreads.ts";
 import { ORCHESTRATION_PROJECTOR_NAMES } from "./ProjectionPipeline.ts";
 import {
   ProjectionSnapshotQuery,
@@ -53,7 +57,7 @@ const ProjectionThreadMessageDbRowSchema = ProjectionThreadMessage.mapFields(
   }),
 );
 const ProjectionThreadProposedPlanDbRowSchema = ProjectionThreadProposedPlan;
-const ProjectionThreadDbRowSchema = ProjectionThread;
+const ProjectionThreadDbRowSchema = ProjectionThreadDbRow;
 const ProjectionThreadActivityDbRowSchema = ProjectionThreadActivity.mapFields(
   Struct.assign({
     payload: Schema.fromJsonString(Schema.Unknown),
@@ -70,6 +74,7 @@ const ProjectionLatestTurnDbRowSchema = Schema.Struct({
   threadId: ProjectionThread.fields.threadId,
   turnId: TurnId,
   state: Schema.String,
+  interactionMode: ProjectionThread.fields.interactionMode,
   requestedAt: IsoDateTime,
   startedAt: Schema.NullOr(IsoDateTime),
   completedAt: Schema.NullOr(IsoDateTime),
@@ -161,6 +166,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           interaction_mode AS "interactionMode",
           branch,
           worktree_path AS "worktreePath",
+          is_pinned AS "isPinned",
           latest_turn_id AS "latestTurnId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
@@ -281,6 +287,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           thread_id AS "threadId",
           turn_id AS "turnId",
           state,
+          interaction_mode AS "interactionMode",
           requested_at AS "requestedAt",
           started_at AS "startedAt",
           completed_at AS "completedAt",
@@ -493,6 +500,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                     : row.state === "completed"
                       ? "completed"
                       : "running",
+              interactionMode: row.interactionMode,
               requestedAt: row.requestedAt,
               startedAt: row.startedAt,
               completedAt: row.completedAt,
@@ -524,25 +532,29 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             deletedAt: row.deletedAt,
           }));
 
-          const threads: Array<OrchestrationThread> = threadRows.map((row) => ({
-            id: row.threadId,
-            projectId: row.projectId,
-            title: row.title,
-            model: row.model,
-            runtimeMode: row.runtimeMode,
-            interactionMode: row.interactionMode,
-            branch: row.branch,
-            worktreePath: row.worktreePath,
-            latestTurn: latestTurnByThread.get(row.threadId) ?? null,
-            createdAt: row.createdAt,
-            updatedAt: row.updatedAt,
-            deletedAt: row.deletedAt,
-            messages: messagesByThread.get(row.threadId) ?? [],
-            proposedPlans: proposedPlansByThread.get(row.threadId) ?? [],
-            activities: activitiesByThread.get(row.threadId) ?? [],
-            checkpoints: checkpointsByThread.get(row.threadId) ?? [],
-            session: sessionsByThread.get(row.threadId) ?? null,
-          }));
+          const threads: Array<OrchestrationThread> = threadRows.map((row) => {
+            const normalizedRow = normalizeProjectionThreadDbRow(row);
+            return {
+              id: normalizedRow.threadId,
+              projectId: normalizedRow.projectId,
+              title: normalizedRow.title,
+              model: normalizedRow.model,
+              runtimeMode: normalizedRow.runtimeMode,
+              interactionMode: normalizedRow.interactionMode,
+              branch: normalizedRow.branch,
+              worktreePath: normalizedRow.worktreePath,
+              isPinned: normalizedRow.isPinned,
+              latestTurn: latestTurnByThread.get(normalizedRow.threadId) ?? null,
+              createdAt: normalizedRow.createdAt,
+              updatedAt: normalizedRow.updatedAt,
+              deletedAt: normalizedRow.deletedAt,
+              messages: messagesByThread.get(normalizedRow.threadId) ?? [],
+              proposedPlans: proposedPlansByThread.get(normalizedRow.threadId) ?? [],
+              activities: activitiesByThread.get(normalizedRow.threadId) ?? [],
+              checkpoints: checkpointsByThread.get(normalizedRow.threadId) ?? [],
+              session: sessionsByThread.get(normalizedRow.threadId) ?? null,
+            };
+          });
 
           const snapshot = {
             snapshotSequence: computeSnapshotSequence(stateRows),

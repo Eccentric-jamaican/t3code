@@ -31,24 +31,16 @@ import {
 } from "@t3tools/shared/model";
 import {
   memo,
-  type PointerEvent as ReactPointerEvent,
   useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
-  useId,
 } from "react";
-import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useDebouncedValue } from "@tanstack/react-pacer";
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import {
-  measureElement as measureVirtualElement,
-  type VirtualItem,
-  useVirtualizer,
-} from "@tanstack/react-virtual";
 import { gitBranchesQueryOptions, gitCreateWorktreeMutationOptions } from "~/lib/gitReactQuery";
 import { projectSearchEntriesQueryOptions } from "~/lib/projectReactQuery";
 import { serverConfigQueryOptions, serverQueryKeys } from "~/lib/serverReactQuery";
@@ -81,7 +73,7 @@ import {
   formatElapsed,
   formatTimestamp,
 } from "../session-logic";
-import { AUTO_SCROLL_BOTTOM_THRESHOLD_PX, isScrollContainerNearBottom } from "../chat-scroll";
+import { isScrollContainerNearBottom } from "../chat-scroll";
 import {
   buildPendingUserInputAnswers,
   derivePendingUserInputProgress,
@@ -92,7 +84,6 @@ import { useStore } from "../store";
 import {
   buildPlanImplementationThreadTitle,
   buildPlanImplementationPrompt,
-  buildProposedPlanMarkdownFilename,
   proposedPlanTitle,
   resolvePlanFollowUpSubmission,
 } from "../proposedPlan";
@@ -104,17 +95,11 @@ import {
   MAX_THREAD_TERMINAL_COUNT,
   type ChatMessage,
   type Thread,
-  type TurnDiffFileChange,
   type TurnDiffSummary,
 } from "../types";
 import { basenameOfPath, getVscodeIconUrlForEntry } from "../vscode-icons";
 import { useTheme } from "../hooks/useTheme";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
-import {
-  buildTurnDiffTree,
-  summarizeTurnDiffStats,
-  type TurnDiffTreeNode,
-} from "../lib/turnDiffTree";
 import BranchToolbar from "./BranchToolbar";
 import GitActionsControl from "./GitActionsControl";
 import {
@@ -122,31 +107,23 @@ import {
   resolveShortcutCommand,
   shortcutLabelForCommand,
 } from "../keybindings";
-import ChatMarkdown from "./ChatMarkdown";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "./ui/alert";
 import {
   BotIcon,
   ChevronDownIcon,
-  ChevronLeftIcon,
-  ChevronRightIcon,
   CircleAlertIcon,
   FileIcon,
   FolderIcon,
   DiffIcon,
-  EllipsisIcon,
   FolderClosedIcon,
   LockIcon,
   LockOpenIcon,
-  Undo2Icon,
   XIcon,
-  CopyIcon,
-  CheckIcon,
   ZapIcon,
   PinIcon,
 } from "lucide-react";
 import { Button } from "./ui/button";
-import { Input } from "./ui/input";
 import { Separator } from "./ui/separator";
 import { Group, GroupSeparator } from "./ui/group";
 import {
@@ -177,15 +154,6 @@ import { cn, isMacPlatform, isWindowsPlatform } from "~/lib/utils";
 import { Badge } from "./ui/badge";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { Command, CommandItem, CommandList } from "./ui/command";
-import {
-  Dialog,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogPanel,
-  DialogPopup,
-  DialogTitle,
-} from "./ui/dialog";
 import { toastManager } from "./ui/toast";
 import { decodeProjectScriptKeybindingRule } from "~/lib/projectScriptKeybindings";
 import ProjectScriptsControl, { type NewProjectScriptInput } from "./ProjectScriptsControl";
@@ -218,25 +186,17 @@ import {
   useComposerThreadDraft,
 } from "../composerDraftStore";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
-import { clamp } from "effect/Number";
 import { ComposerPromptEditor, type ComposerPromptEditorHandle } from "./ComposerPromptEditor";
-import { estimateTimelineMessageHeight } from "./timelineHeight";
+import { buildQuotedSelectionInsertion, normalizeSelectedText } from "../chatPinnedSelections";
+import { MessagesTimeline } from "./chat/MessagesTimeline";
 import {
-  buildQuotedSelectionInsertion,
-  normalizeSelectedText,
-  reconstructRangeFromOffsets,
-  serializeRangeWithinContainer,
-} from "../chatPinnedSelections";
-
-function formatMessageMeta(createdAt: string, duration: string | null): string {
-  if (!duration) return formatTimestamp(createdAt);
-  return `${formatTimestamp(createdAt)} • ${duration}`;
-}
+  ExpandedImagePreview as ExpandedImagePreviewDialog,
+  buildExpandedImagePreview,
+  type ExpandedImagePreview,
+} from "./chat/ExpandedImagePreview";
 
 const LAST_EDITOR_KEY = "t3code:last-editor";
 const LAST_INVOKED_SCRIPT_BY_PROJECT_KEY = "t3code:last-invoked-script-by-project";
-const MAX_VISIBLE_WORK_LOG_ENTRIES = 6;
-const ALWAYS_UNVIRTUALIZED_TAIL_ROWS = 8;
 const ATTACHMENT_PREVIEW_HANDOFF_TTL_MS = 5000;
 const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
 const IMAGE_ONLY_BOOTSTRAP_PROMPT =
@@ -248,158 +208,6 @@ const EMPTY_AVAILABLE_EDITORS: EditorId[] = [];
 const EMPTY_PROVIDER_STATUSES: ServerProviderStatus[] = [];
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
 const COMPOSER_PATH_QUERY_DEBOUNCE_MS = 120;
-const CHAT_SELECTION_REGION_ATTRIBUTE = "data-chat-selection-region";
-const CHAT_SELECTION_REGION_VALUE = "assistant-output";
-const CHAT_SELECTION_SOURCE_KIND_ATTRIBUTE = "data-chat-selection-source-kind";
-const CHAT_SELECTION_SOURCE_ID_ATTRIBUTE = "data-chat-selection-source-id";
-const CHAT_SELECTION_QUOTE_ACTION_LABEL = "Quote selected text";
-const CHAT_SELECTION_PIN_ACTION_LABEL = "Pin selected text";
-const CHAT_SELECTION_ACTION_WIDTH_PX = 96;
-const CHAT_SELECTION_ACTION_HEIGHT_PX = 36;
-const CHAT_SELECTION_VIEWPORT_PADDING_PX = 12;
-const CHAT_SELECTION_ACTION_OFFSET_PX = 8;
-const CHAT_PIN_MARKER_SIZE_PX = 24;
-const CHAT_PIN_MARKER_SCROLL_SETTLE_MS = 96;
-const CHAT_SELECTION_IGNORE_SELECTOR =
-  "button, summary, [role='button'], [role='menuitem'], input, textarea, select, option, [data-chat-selection-ignore='true']";
-
-interface AssistantSelectionActionState {
-  left: number;
-  top: number;
-  selectedText: string;
-  sourceKind: PinnedSelectionDraft["sourceKind"];
-  sourceId: string;
-  plainTextStart: number;
-  plainTextEnd: number;
-}
-
-interface PinnedSelectionMarker {
-  id: string;
-  left: number;
-  top: number;
-  selectedText: string;
-}
-
-function getSelectionRegionElement(node: Node | null): HTMLElement | null {
-  if (!node) return null;
-  const element = node instanceof Element ? node : node.parentElement;
-  return (
-    element?.closest<HTMLElement>(
-      `[${CHAT_SELECTION_REGION_ATTRIBUTE}="${CHAT_SELECTION_REGION_VALUE}"]`,
-    ) ?? null
-  );
-}
-
-function getSelectionSourceKind(
-  element: HTMLElement,
-): PinnedSelectionDraft["sourceKind"] | null {
-  const sourceKind = element.getAttribute(CHAT_SELECTION_SOURCE_KIND_ATTRIBUTE);
-  return sourceKind === "assistant-message" || sourceKind === "proposed-plan" ? sourceKind : null;
-}
-
-function getSelectionSourceId(element: HTMLElement): string | null {
-  const sourceId = element.getAttribute(CHAT_SELECTION_SOURCE_ID_ATTRIBUTE);
-  return sourceId && sourceId.length > 0 ? sourceId : null;
-}
-
-function isIgnoredSelectionTarget(node: Node | null): boolean {
-  if (!node) return false;
-  const element = node instanceof Element ? node : node.parentElement;
-  return Boolean(element?.closest(CHAT_SELECTION_IGNORE_SELECTOR));
-}
-
-function getSelectionAnchorRect(range: Range): DOMRect | null {
-  const rects = Array.from(range.getClientRects()).filter(
-    (rect) => rect.width > 0 || rect.height > 0,
-  );
-  const anchorRect = rects.at(-1) ?? range.getBoundingClientRect();
-  if (anchorRect.width <= 0 && anchorRect.height <= 0) {
-    return null;
-  }
-  return anchorRect;
-}
-
-function getPinnedSelectionMarkerPosition(range: Range): { left: number; top: number } | null {
-  const anchorRect = getSelectionAnchorRect(range);
-  if (!anchorRect) {
-    return null;
-  }
-
-  const minViewportEdge = CHAT_SELECTION_VIEWPORT_PADDING_PX;
-  const maxViewportEdgeX = window.innerWidth - CHAT_SELECTION_VIEWPORT_PADDING_PX;
-  const maxViewportEdgeY = window.innerHeight - CHAT_SELECTION_VIEWPORT_PADDING_PX;
-  const isOutsideViewport =
-    anchorRect.bottom <= minViewportEdge ||
-    anchorRect.top >= maxViewportEdgeY ||
-    anchorRect.right <= minViewportEdge ||
-    anchorRect.left >= maxViewportEdgeX;
-  if (isOutsideViewport) {
-    return null;
-  }
-
-  return {
-    left: clamp(anchorRect.right - Math.round(CHAT_PIN_MARKER_SIZE_PX * 0.4), {
-      minimum: minViewportEdge,
-      maximum: maxViewportEdgeX - CHAT_PIN_MARKER_SIZE_PX,
-    }),
-    top: clamp(anchorRect.top + anchorRect.height / 2 - CHAT_PIN_MARKER_SIZE_PX / 2, {
-      minimum: minViewportEdge,
-      maximum: maxViewportEdgeY - CHAT_PIN_MARKER_SIZE_PX,
-    }),
-  };
-}
-
-function scrollRangeIntoContainerView(
-  range: Range,
-  scrollContainer: HTMLElement,
-  behavior: ScrollBehavior = "smooth",
-): boolean {
-  const anchorRect = getSelectionAnchorRect(range);
-  if (!anchorRect) {
-    return false;
-  }
-
-  const containerRect = scrollContainer.getBoundingClientRect();
-  const targetTop =
-    scrollContainer.scrollTop +
-    (anchorRect.top - containerRect.top) -
-    (containerRect.height / 2 - anchorRect.height / 2);
-  const maxScrollTop = Math.max(0, scrollContainer.scrollHeight - scrollContainer.clientHeight);
-
-  scrollContainer.scrollTo({
-    top: clamp(targetTop, { minimum: 0, maximum: maxScrollTop }),
-    behavior,
-  });
-  return true;
-}
-
-function getSelectionActionPosition(anchorRect: DOMRect): { left: number; top: number } {
-  const preferredLeft = anchorRect.right + CHAT_SELECTION_ACTION_OFFSET_PX;
-  const preferredTop = anchorRect.bottom + CHAT_SELECTION_ACTION_OFFSET_PX;
-  const maxLeft =
-    window.innerWidth - CHAT_SELECTION_VIEWPORT_PADDING_PX - CHAT_SELECTION_ACTION_WIDTH_PX;
-  const maxTop =
-    window.innerHeight - CHAT_SELECTION_VIEWPORT_PADDING_PX - CHAT_SELECTION_ACTION_HEIGHT_PX;
-  const minLeft = CHAT_SELECTION_VIEWPORT_PADDING_PX;
-  const minTop = CHAT_SELECTION_VIEWPORT_PADDING_PX;
-
-  const left = clamp(
-    preferredLeft > maxLeft ? anchorRect.left - CHAT_SELECTION_ACTION_WIDTH_PX : preferredLeft,
-    {
-      minimum: minLeft,
-      maximum: Math.max(minLeft, maxLeft),
-    },
-  );
-  const top = clamp(
-    preferredTop > maxTop ? anchorRect.top - CHAT_SELECTION_ACTION_HEIGHT_PX : preferredTop,
-    {
-      minimum: minTop,
-      maximum: Math.max(minTop, maxTop),
-    },
-  );
-
-  return { left, top };
-}
 const SCRIPT_TERMINAL_COLS = 120;
 const SCRIPT_TERMINAL_ROWS = 30;
 const WORKTREE_BRANCH_PREFIX = "t3code";
@@ -420,59 +228,6 @@ function readLastInvokedScriptByProjectFromStorage(): Record<string, string> {
   } catch {
     return {};
   }
-}
-
-function workToneClass(tone: "thinking" | "tool" | "info" | "error"): string {
-  if (tone === "error") return "text-rose-300/50 dark:text-rose-300/50";
-  if (tone === "tool") return "text-muted-foreground/70";
-  if (tone === "thinking") return "text-muted-foreground/50";
-  return "text-muted-foreground/40";
-}
-
-function normalizePlanMarkdownForExport(planMarkdown: string): string {
-  return `${planMarkdown.trimEnd()}\n`;
-}
-
-function downloadTextFile(filename: string, contents: string): void {
-  const blob = new Blob([contents], { type: "text/markdown;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = filename;
-  anchor.click();
-  window.setTimeout(() => {
-    URL.revokeObjectURL(url);
-  }, 0);
-}
-
-interface ExpandedImageItem {
-  src: string;
-  name: string;
-}
-
-interface ExpandedImagePreview {
-  images: ExpandedImageItem[];
-  index: number;
-}
-
-function buildExpandedImagePreview(
-  images: ReadonlyArray<{ id: string; name: string; previewUrl?: string }>,
-  selectedImageId: string,
-): ExpandedImagePreview | null {
-  const previewableImages = images.flatMap((image) =>
-    image.previewUrl ? [{ id: image.id, src: image.previewUrl, name: image.name }] : [],
-  );
-  if (previewableImages.length === 0) {
-    return null;
-  }
-  const selectedIndex = previewableImages.findIndex((image) => image.id === selectedImageId);
-  if (selectedIndex < 0) {
-    return null;
-  }
-  return {
-    images: previewableImages.map((image) => ({ src: image.src, name: image.name })),
-    index: selectedIndex,
-  };
 }
 
 function buildLocalDraftThread(
@@ -497,6 +252,7 @@ function buildLocalDraftThread(
     lastVisitedAt: draftThread.createdAt,
     branch: draftThread.branch,
     worktreePath: draftThread.worktreePath,
+    isPinned: false,
     turnDiffSummaries: [],
     activities: [],
     proposedPlans: [],
@@ -817,6 +573,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const [pendingPinnedSelectionJumpId, setPendingPinnedSelectionJumpId] = useState<string | null>(
     null,
   );
+  const [showScrollToBottomPill, setShowScrollToBottomPill] = useState(false);
   const messagesScrollRef = useRef<HTMLDivElement>(null);
   const [messagesScrollElement, setMessagesScrollElement] = useState<HTMLDivElement | null>(null);
   const shouldAutoScrollRef = useRef(true);
@@ -1071,8 +828,13 @@ export default function ChatView({ threadId }: ChatViewProps) {
     );
   }, [activeLatestTurn?.turnId, activeThread?.proposedPlans, latestTurnSettled]);
   const activePlan = useMemo(
-    () => deriveActivePlanState(threadActivities, activeLatestTurn?.turnId ?? undefined),
-    [activeLatestTurn?.turnId, threadActivities],
+    () =>
+      deriveActivePlanState(
+        threadActivities,
+        activeLatestTurn?.turnId ?? undefined,
+        activeLatestTurn?.interactionMode,
+      ),
+    [activeLatestTurn?.interactionMode, activeLatestTurn?.turnId, threadActivities],
   );
   const showPlanFollowUpPrompt =
     pendingUserInputs.length === 0 &&
@@ -1224,6 +986,13 @@ export default function ChatView({ threadId }: ChatViewProps) {
       deriveTimelineEntries(timelineMessages, activeThread?.proposedPlans ?? [], workLogEntries),
     [activeThread?.proposedPlans, timelineMessages, workLogEntries],
   );
+  const syncScrollToBottomPillVisibility = useCallback((scrollContainer: HTMLDivElement | null) => {
+    const nextVisible =
+      scrollContainer !== null &&
+      timelineEntries.length > 0 &&
+      !isScrollContainerNearBottom(scrollContainer);
+    setShowScrollToBottomPill((current) => (current === nextVisible ? current : nextVisible));
+  }, [timelineEntries.length]);
   const { turnDiffSummaries, inferredCheckpointTurnCountByTurnId } =
     useTurnDiffSummaries(activeThread);
   const turnDiffSummaryByAssistantMessageId = useMemo(() => {
@@ -1866,6 +1635,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
     scrollContainer.scrollTo({ top: scrollContainer.scrollHeight, behavior });
     lastKnownScrollTopRef.current = scrollContainer.scrollTop;
     shouldAutoScrollRef.current = true;
+    setShowScrollToBottomPill(false);
   }, []);
   const cancelPendingStickToBottom = useCallback(() => {
     const pendingFrame = pendingAutoScrollFrameRef.current;
@@ -1954,6 +1724,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
     }
 
     lastKnownScrollTopRef.current = currentScrollTop;
+    setShowScrollToBottomPill((current) => (current === !isNearBottom ? current : !isNearBottom));
   }, []);
   const onMessagesWheel = useCallback((event: React.WheelEvent<HTMLDivElement>) => {
     if (event.deltaY < 0) {
@@ -1986,6 +1757,12 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const onMessagesTouchEnd = useCallback((_event: React.TouchEvent<HTMLDivElement>) => {
     lastTouchClientYRef.current = null;
   }, []);
+  const onScrollToBottomClick = useCallback(() => {
+    pendingUserScrollUpIntentRef.current = false;
+    cancelPendingStickToBottom();
+    scrollMessagesToBottom("smooth");
+    scheduleStickToBottom();
+  }, [cancelPendingStickToBottom, scheduleStickToBottom, scrollMessagesToBottom]);
   useEffect(() => {
     return () => {
       cancelPendingStickToBottom();
@@ -1995,6 +1772,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
   useLayoutEffect(() => {
     if (!activeThread?.id) return;
     shouldAutoScrollRef.current = true;
+    setShowScrollToBottomPill(false);
     scheduleStickToBottom();
     const timeout = window.setTimeout(() => {
       const scrollContainer = messagesScrollRef.current;
@@ -2006,6 +1784,13 @@ export default function ChatView({ threadId }: ChatViewProps) {
       window.clearTimeout(timeout);
     };
   }, [activeThread?.id, scheduleStickToBottom]);
+  useLayoutEffect(() => {
+    if (shouldAutoScrollRef.current) {
+      setShowScrollToBottomPill(false);
+      return;
+    }
+    syncScrollToBottomPillVisibility(messagesScrollRef.current);
+  }, [messageCount, syncScrollToBottomPillVisibility, timelineEntries]);
   useLayoutEffect(() => {
     const composerForm = composerFormRef.current;
     if (!composerForm) return;
@@ -2206,37 +1991,6 @@ export default function ChatView({ threadId }: ChatViewProps) {
       return { ...existing, index: nextIndex };
     });
   }, []);
-
-  useEffect(() => {
-    if (!expandedImage) {
-      return;
-    }
-
-    const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        event.stopPropagation();
-        closeExpandedImage();
-        return;
-      }
-      if (expandedImage.images.length <= 1) {
-        return;
-      }
-      if (event.key === "ArrowLeft") {
-        event.preventDefault();
-        event.stopPropagation();
-        navigateExpandedImage(-1);
-        return;
-      }
-      if (event.key !== "ArrowRight") return;
-      event.preventDefault();
-      event.stopPropagation();
-      navigateExpandedImage(1);
-    };
-
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [closeExpandedImage, expandedImage, navigateExpandedImage]);
 
   const activeWorktreePath = activeThread?.worktreePath;
   const envMode: DraftThreadEnvMode = activeWorktreePath
@@ -3490,7 +3244,6 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const onExpandTimelineImage = useCallback((preview: ExpandedImagePreview) => {
     setExpandedImage(preview);
   }, []);
-  const expandedImageItem = expandedImage ? expandedImage.images[expandedImage.index] : null;
   const onOpenTurnDiff = useCallback(
     (turnId: TurnId, filePath?: string) => {
       void navigate({
@@ -3578,49 +3331,65 @@ export default function ChatView({ threadId }: ChatViewProps) {
       <PlanModePanel activePlan={activePlan} />
 
       {/* Messages */}
-      <div
-        ref={setMessagesScrollContainerRef}
-        className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain px-3 py-3 sm:px-5 sm:py-4"
-        onScroll={onMessagesScroll}
-        onClickCapture={onMessagesClickCapture}
-        onWheel={onMessagesWheel}
-        onPointerDown={onMessagesPointerDown}
-        onPointerUp={onMessagesPointerUp}
-        onPointerCancel={onMessagesPointerCancel}
-        onTouchStart={onMessagesTouchStart}
-        onTouchMove={onMessagesTouchMove}
-        onTouchEnd={onMessagesTouchEnd}
-        onTouchCancel={onMessagesTouchEnd}
-      >
-        <MessagesTimeline
-          key={activeThread.id}
-          hasMessages={timelineEntries.length > 0}
-          isWorking={isWorking}
-          activeTurnInProgress={!latestTurnSettled}
-          activeTurnStartedAt={activeLatestTurn?.startedAt ?? null}
-          scrollContainer={messagesScrollElement}
-          timelineEntries={timelineEntries}
-          completionDividerBeforeEntryId={completionDividerBeforeEntryId}
-          completionSummary={completionSummary}
-          turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
-          nowIso={nowIso}
-          expandedWorkGroups={expandedWorkGroups}
-          onToggleWorkGroup={onToggleWorkGroup}
-          onOpenTurnDiff={onOpenTurnDiff}
-          revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
-          onRevertUserMessage={onRevertUserMessage}
-          isRevertingCheckpoint={isRevertingCheckpoint}
-          onImageExpand={onExpandTimelineImage}
-          markdownCwd={gitCwd ?? undefined}
-          resolvedTheme={resolvedTheme}
-          workspaceRoot={activeProject?.cwd ?? undefined}
-          pinnedSelections={composerPinnedSelections}
-          onAskAboutSelectedText={onAskAboutSelectedText}
-          onPinSelectedText={onPinSelectedText}
-          onRemovePinnedSelection={onRemovePinnedSelection}
-          pendingPinnedSelectionJumpId={pendingPinnedSelectionJumpId}
-          onPinnedSelectionJumpHandled={onPinnedSelectionJumpHandled}
-        />
+      <div className="relative min-h-0 flex-1">
+        <div
+          ref={setMessagesScrollContainerRef}
+          className="min-h-0 size-full overflow-x-hidden overflow-y-auto overscroll-y-contain px-3 py-3 sm:px-5 sm:py-4"
+          onScroll={onMessagesScroll}
+          onClickCapture={onMessagesClickCapture}
+          onWheel={onMessagesWheel}
+          onPointerDown={onMessagesPointerDown}
+          onPointerUp={onMessagesPointerUp}
+          onPointerCancel={onMessagesPointerCancel}
+          onTouchStart={onMessagesTouchStart}
+          onTouchMove={onMessagesTouchMove}
+          onTouchEnd={onMessagesTouchEnd}
+          onTouchCancel={onMessagesTouchEnd}
+        >
+          <MessagesTimeline
+            key={activeThread.id}
+            hasMessages={timelineEntries.length > 0}
+            isWorking={isWorking}
+            activeTurnInProgress={!latestTurnSettled}
+            activeTurnStartedAt={activeLatestTurn?.startedAt ?? null}
+            scrollContainer={messagesScrollElement}
+            timelineEntries={timelineEntries}
+            completionDividerBeforeEntryId={completionDividerBeforeEntryId}
+            completionSummary={completionSummary}
+            turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
+            nowIso={nowIso}
+            expandedWorkGroups={expandedWorkGroups}
+            onToggleWorkGroup={onToggleWorkGroup}
+            onOpenTurnDiff={onOpenTurnDiff}
+            revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
+            onRevertUserMessage={onRevertUserMessage}
+            isRevertingCheckpoint={isRevertingCheckpoint}
+            onImageExpand={onExpandTimelineImage}
+            markdownCwd={gitCwd ?? undefined}
+            resolvedTheme={resolvedTheme}
+            workspaceRoot={activeProject?.cwd ?? undefined}
+            pinnedSelections={composerPinnedSelections}
+            onAskAboutSelectedText={onAskAboutSelectedText}
+            onPinSelectedText={onPinSelectedText}
+            onRemovePinnedSelection={onRemovePinnedSelection}
+            pendingPinnedSelectionJumpId={pendingPinnedSelectionJumpId}
+            onPinnedSelectionJumpHandled={onPinnedSelectionJumpHandled}
+          />
+        </div>
+        {showScrollToBottomPill ? (
+          <div className="pointer-events-none absolute inset-x-0 bottom-3 z-10 flex justify-center px-3 sm:bottom-4 sm:px-5">
+            <Button
+              variant="outline"
+              size="sm"
+              className="pointer-events-auto h-9 rounded-full border-border/80 bg-background/90 px-3.5 shadow-lg shadow-black/5 backdrop-blur supports-[backdrop-filter]:bg-background/75"
+              onClick={onScrollToBottomClick}
+              data-scroll-to-bottom-pill="true"
+            >
+              <ChevronDownIcon aria-hidden="true" className="size-3.5" />
+              Scroll to bottom
+            </Button>
+          </div>
+        ) : null}
       </div>
 
       {/* Input bar */}
@@ -4108,73 +3877,11 @@ export default function ChatView({ threadId }: ChatViewProps) {
         );
       })()}
 
-      {expandedImage && expandedImageItem && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 px-4 py-6 [-webkit-app-region:no-drag]"
-          role="dialog"
-          aria-modal="true"
-          aria-label="Expanded image preview"
-        >
-          <button
-            type="button"
-            className="absolute inset-0 z-0 cursor-zoom-out"
-            aria-label="Close image preview"
-            onClick={closeExpandedImage}
-          />
-          {expandedImage.images.length > 1 && (
-            <Button
-              type="button"
-              size="icon"
-              variant="ghost"
-              className="absolute left-2 top-1/2 z-20 -translate-y-1/2 text-white/90 hover:bg-white/10 hover:text-white sm:left-6"
-              aria-label="Previous image"
-              onClick={() => {
-                navigateExpandedImage(-1);
-              }}
-            >
-              <ChevronLeftIcon className="size-5" />
-            </Button>
-          )}
-          <div className="relative isolate z-10 max-h-[92vh] max-w-[92vw]">
-            <Button
-              type="button"
-              size="icon-xs"
-              variant="ghost"
-              className="absolute right-2 top-2"
-              onClick={closeExpandedImage}
-              aria-label="Close image preview"
-            >
-              <XIcon />
-            </Button>
-            <img
-              src={expandedImageItem.src}
-              alt={expandedImageItem.name}
-              className="max-h-[86vh] max-w-[92vw] select-none rounded-lg border border-border/70 bg-background object-contain shadow-2xl"
-              draggable={false}
-            />
-            <p className="mt-2 max-w-[92vw] truncate text-center text-xs text-muted-foreground/80">
-              {expandedImageItem.name}
-              {expandedImage.images.length > 1
-                ? ` (${expandedImage.index + 1}/${expandedImage.images.length})`
-                : ""}
-            </p>
-          </div>
-          {expandedImage.images.length > 1 && (
-            <Button
-              type="button"
-              size="icon"
-              variant="ghost"
-              className="absolute right-2 top-1/2 z-20 -translate-y-1/2 text-white/90 hover:bg-white/10 hover:text-white sm:right-6"
-              aria-label="Next image"
-              onClick={() => {
-                navigateExpandedImage(1);
-              }}
-            >
-              <ChevronRightIcon className="size-5" />
-            </Button>
-          )}
-        </div>
-      )}
+      <ExpandedImagePreviewDialog
+        preview={expandedImage}
+        onClose={closeExpandedImage}
+        onNavigate={navigateExpandedImage}
+      />
     </div>
   );
 }
@@ -4562,1389 +4269,6 @@ const ComposerPlanFollowUpBanner = memo(function ComposerPlanFollowUpBanner({
       {/* <div className="mt-2 text-xs text-muted-foreground">
         Review the plan
       </div> */}
-    </div>
-  );
-});
-
-const MessageCopyButton = memo(function MessageCopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-
-  const handleCopy = useCallback(() => {
-    void navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  }, [text]);
-
-  return (
-    <Button type="button" size="xs" variant="outline" onClick={handleCopy} title="Copy message">
-      {copied ? <CheckIcon className="size-3 text-success" /> : <CopyIcon className="size-3" />}
-    </Button>
-  );
-});
-
-function hasNonZeroStat(stat: { additions: number; deletions: number }): boolean {
-  return stat.additions > 0 || stat.deletions > 0;
-}
-
-const DiffStatLabel = memo(function DiffStatLabel(props: {
-  additions: number;
-  deletions: number;
-  showParentheses?: boolean;
-}) {
-  const { additions, deletions, showParentheses = false } = props;
-  return (
-    <>
-      {showParentheses && <span className="text-muted-foreground/70">(</span>}
-      <span className="text-success">+{additions}</span>
-      <span className="mx-0.5 text-muted-foreground/70">/</span>
-      <span className="text-destructive">-{deletions}</span>
-      {showParentheses && <span className="text-muted-foreground/70">)</span>}
-    </>
-  );
-});
-
-function collectDirectoryPaths(nodes: ReadonlyArray<TurnDiffTreeNode>): string[] {
-  const paths: string[] = [];
-  for (const node of nodes) {
-    if (node.kind !== "directory") continue;
-    paths.push(node.path);
-    paths.push(...collectDirectoryPaths(node.children));
-  }
-  return paths;
-}
-
-function buildDirectoryExpansionState(
-  directoryPaths: ReadonlyArray<string>,
-  expanded: boolean,
-): Record<string, boolean> {
-  const expandedState: Record<string, boolean> = {};
-  for (const directoryPath of directoryPaths) {
-    expandedState[directoryPath] = expanded;
-  }
-  return expandedState;
-}
-
-const ChangedFilesTree = memo(function ChangedFilesTree(props: {
-  turnId: TurnId;
-  files: ReadonlyArray<TurnDiffFileChange>;
-  allDirectoriesExpanded: boolean;
-  resolvedTheme: "light" | "dark";
-  onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
-}) {
-  const { files, allDirectoriesExpanded, onOpenTurnDiff, resolvedTheme, turnId } = props;
-  const treeNodes = useMemo(() => buildTurnDiffTree(files), [files]);
-  const directoryPathsKey = useMemo(
-    () => collectDirectoryPaths(treeNodes).join("\u0000"),
-    [treeNodes],
-  );
-  const allDirectoryExpansionState = useMemo(
-    () =>
-      buildDirectoryExpansionState(
-        directoryPathsKey ? directoryPathsKey.split("\u0000") : [],
-        allDirectoriesExpanded,
-      ),
-    [allDirectoriesExpanded, directoryPathsKey],
-  );
-  const [expandedDirectories, setExpandedDirectories] = useState<Record<string, boolean>>(() =>
-    buildDirectoryExpansionState(directoryPathsKey ? directoryPathsKey.split("\u0000") : [], true),
-  );
-  useEffect(() => {
-    setExpandedDirectories(allDirectoryExpansionState);
-  }, [allDirectoryExpansionState]);
-
-  const toggleDirectory = useCallback((pathValue: string, fallbackExpanded: boolean) => {
-    setExpandedDirectories((current) => ({
-      ...current,
-      [pathValue]: !(current[pathValue] ?? fallbackExpanded),
-    }));
-  }, []);
-
-  const renderTreeNode = (node: TurnDiffTreeNode, depth: number) => {
-    const leftPadding = 8 + depth * 14;
-    if (node.kind === "directory") {
-      const isExpanded = expandedDirectories[node.path] ?? depth === 0;
-      return (
-        <div key={`dir:${node.path}`}>
-          <button
-            type="button"
-            className="group flex w-full items-center gap-1.5 rounded-md py-1 pr-2 text-left hover:bg-background/80"
-            style={{ paddingLeft: `${leftPadding}px` }}
-            onClick={() => toggleDirectory(node.path, depth === 0)}
-          >
-            <ChevronRightIcon
-              aria-hidden="true"
-              className={cn(
-                "size-3.5 shrink-0 text-muted-foreground/70 transition-transform group-hover:text-foreground/80",
-                isExpanded && "rotate-90",
-              )}
-            />
-            {isExpanded ? (
-              <FolderIcon className="size-3.5 shrink-0 text-muted-foreground/75" />
-            ) : (
-              <FolderClosedIcon className="size-3.5 shrink-0 text-muted-foreground/75" />
-            )}
-            <span className="truncate font-mono text-[11px] text-muted-foreground/90 group-hover:text-foreground/90">
-              {node.name}
-            </span>
-            {hasNonZeroStat(node.stat) && (
-              <span className="ml-auto shrink-0 font-mono text-[10px] tabular-nums">
-                <DiffStatLabel additions={node.stat.additions} deletions={node.stat.deletions} />
-              </span>
-            )}
-          </button>
-          {isExpanded && (
-            <div className="space-y-0.5">
-              {node.children.map((childNode) => renderTreeNode(childNode, depth + 1))}
-            </div>
-          )}
-        </div>
-      );
-    }
-
-    return (
-      <button
-        key={`file:${node.path}`}
-        type="button"
-        className="group flex w-full items-center gap-1.5 rounded-md py-1 pr-2 text-left hover:bg-background/80"
-        style={{ paddingLeft: `${leftPadding}px` }}
-        onClick={() => onOpenTurnDiff(turnId, node.path)}
-      >
-        <span aria-hidden="true" className="size-3.5 shrink-0" />
-        <VscodeEntryIcon
-          pathValue={node.path}
-          kind="file"
-          theme={resolvedTheme}
-          className="size-3.5 text-muted-foreground/70"
-        />
-        <span className="truncate font-mono text-[11px] text-muted-foreground/80 group-hover:text-foreground/90">
-          {node.name}
-        </span>
-        {node.stat && (
-          <span className="ml-auto shrink-0 font-mono text-[10px] tabular-nums">
-            <DiffStatLabel additions={node.stat.additions} deletions={node.stat.deletions} />
-          </span>
-        )}
-      </button>
-    );
-  };
-
-  return <div className="space-y-0.5">{treeNodes.map((node) => renderTreeNode(node, 0))}</div>;
-});
-
-const ProposedPlanCard = memo(function ProposedPlanCard({
-  planMarkdown,
-  cwd,
-  workspaceRoot,
-  sourceId,
-}: {
-  planMarkdown: string;
-  cwd: string | undefined;
-  workspaceRoot: string | undefined;
-  sourceId: string;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const [isSaveDialogOpen, setIsSaveDialogOpen] = useState(false);
-  const [savePath, setSavePath] = useState("");
-  const [isSavingToWorkspace, setIsSavingToWorkspace] = useState(false);
-  const savePathInputId = useId();
-  const title = proposedPlanTitle(planMarkdown) ?? "Proposed plan";
-  const lineCount = planMarkdown.split("\n").length;
-  const canCollapse = planMarkdown.length > 900 || lineCount > 20;
-  const downloadFilename = buildProposedPlanMarkdownFilename(planMarkdown);
-  const saveContents = normalizePlanMarkdownForExport(planMarkdown);
-
-  const handleDownload = () => {
-    downloadTextFile(downloadFilename, saveContents);
-  };
-
-  const openSaveDialog = () => {
-    if (!workspaceRoot) {
-      toastManager.add({
-        type: "error",
-        title: "Workspace path is unavailable",
-        description: "This thread does not have a workspace path to save into.",
-      });
-      return;
-    }
-    setSavePath((existing) => (existing.length > 0 ? existing : downloadFilename));
-    setIsSaveDialogOpen(true);
-  };
-
-  const handleSaveToWorkspace = () => {
-    const api = readNativeApi();
-    const relativePath = savePath.trim();
-    if (!api || !workspaceRoot) {
-      return;
-    }
-    if (!relativePath) {
-      toastManager.add({
-        type: "warning",
-        title: "Enter a workspace path",
-      });
-      return;
-    }
-
-    setIsSavingToWorkspace(true);
-    void api.projects
-      .writeFile({
-        cwd: workspaceRoot,
-        relativePath,
-        contents: saveContents,
-      })
-      .then((result) => {
-        setIsSaveDialogOpen(false);
-        toastManager.add({
-          type: "success",
-          title: "Plan saved to workspace",
-          description: result.relativePath,
-        });
-      })
-      .catch((error) => {
-        toastManager.add({
-          type: "error",
-          title: "Could not save plan",
-          description: error instanceof Error ? error.message : "An error occurred while saving.",
-        });
-      })
-      .then(
-        () => {
-          setIsSavingToWorkspace(false);
-        },
-        () => {
-          setIsSavingToWorkspace(false);
-        },
-      );
-  };
-
-  return (
-    <div className="rounded-[24px] border border-border/80 bg-card/70 p-4 sm:p-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-2">
-          <Badge variant="secondary">Plan</Badge>
-          <p className="truncate text-sm font-medium text-foreground">{title}</p>
-        </div>
-        <Menu>
-          <MenuTrigger
-            render={<Button aria-label="Plan actions" size="icon-xs" variant="outline" />}
-          >
-            <EllipsisIcon aria-hidden="true" className="size-4" />
-          </MenuTrigger>
-          <MenuPopup align="end">
-            <MenuItem onClick={handleDownload}>Download as markdown</MenuItem>
-            <MenuItem onClick={openSaveDialog} disabled={!workspaceRoot || isSavingToWorkspace}>
-              Save to workspace
-            </MenuItem>
-          </MenuPopup>
-        </Menu>
-      </div>
-      <div className="mt-4">
-        <div className={cn("relative", canCollapse && !expanded && "max-h-104 overflow-hidden")}>
-          <div
-            {...{
-              [CHAT_SELECTION_REGION_ATTRIBUTE]: CHAT_SELECTION_REGION_VALUE,
-              [CHAT_SELECTION_SOURCE_KIND_ATTRIBUTE]: "proposed-plan",
-              [CHAT_SELECTION_SOURCE_ID_ATTRIBUTE]: sourceId,
-            }}
-          >
-            <ChatMarkdown text={planMarkdown} cwd={cwd} isStreaming={false} />
-          </div>
-          {canCollapse && !expanded ? (
-            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-linear-to-t from-card/95 via-card/80 to-transparent" />
-          ) : null}
-        </div>
-        {canCollapse ? (
-          <div className="mt-4 flex justify-center">
-            <Button size="sm" variant="outline" onClick={() => setExpanded((value) => !value)}>
-              {expanded ? "Collapse plan" : "Expand plan"}
-            </Button>
-          </div>
-        ) : null}
-      </div>
-
-      <Dialog
-        open={isSaveDialogOpen}
-        onOpenChange={(open) => {
-          if (!isSavingToWorkspace) {
-            setIsSaveDialogOpen(open);
-          }
-        }}
-      >
-        <DialogPopup className="max-w-xl">
-          <DialogHeader>
-            <DialogTitle>Save plan to workspace</DialogTitle>
-            <DialogDescription>
-              Enter a path relative to <code>{workspaceRoot ?? "the workspace"}</code>.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogPanel className="space-y-3">
-            <label htmlFor={savePathInputId} className="grid gap-1.5">
-              <span className="text-xs font-medium text-foreground">Workspace path</span>
-              <Input
-                id={savePathInputId}
-                value={savePath}
-                onChange={(event) => setSavePath(event.target.value)}
-                placeholder={downloadFilename}
-                spellCheck={false}
-                disabled={isSavingToWorkspace}
-              />
-            </label>
-          </DialogPanel>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setIsSaveDialogOpen(false)}
-              disabled={isSavingToWorkspace}
-            >
-              Cancel
-            </Button>
-            <Button
-              size="sm"
-              onClick={() => void handleSaveToWorkspace()}
-              disabled={isSavingToWorkspace}
-            >
-              {isSavingToWorkspace ? "Saving..." : "Save"}
-            </Button>
-          </DialogFooter>
-        </DialogPopup>
-      </Dialog>
-    </div>
-  );
-});
-
-interface MessagesTimelineProps {
-  hasMessages: boolean;
-  isWorking: boolean;
-  activeTurnInProgress: boolean;
-  activeTurnStartedAt: string | null;
-  scrollContainer: HTMLDivElement | null;
-  timelineEntries: ReturnType<typeof deriveTimelineEntries>;
-  completionDividerBeforeEntryId: string | null;
-  completionSummary: string | null;
-  turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
-  nowIso: string;
-  expandedWorkGroups: Record<string, boolean>;
-  onToggleWorkGroup: (groupId: string) => void;
-  onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
-  revertTurnCountByUserMessageId: Map<MessageId, number>;
-  onRevertUserMessage: (messageId: MessageId) => void;
-  isRevertingCheckpoint: boolean;
-  onImageExpand: (preview: ExpandedImagePreview) => void;
-  markdownCwd: string | undefined;
-  resolvedTheme: "light" | "dark";
-  workspaceRoot: string | undefined;
-  pinnedSelections: readonly PinnedSelectionDraft[];
-  onAskAboutSelectedText: (selectedText: string) => void;
-  onPinSelectedText: (
-    selection: Omit<PinnedSelectionDraft, "id" | "createdAt">,
-  ) => void;
-  onRemovePinnedSelection: (pinnedSelectionId: string) => void;
-  pendingPinnedSelectionJumpId: string | null;
-  onPinnedSelectionJumpHandled: (pinnedSelectionId: string) => void;
-}
-
-type TimelineEntry = ReturnType<typeof deriveTimelineEntries>[number];
-type TimelineMessage = Extract<TimelineEntry, { kind: "message" }>["message"];
-type TimelineProposedPlan = Extract<TimelineEntry, { kind: "proposed-plan" }>["proposedPlan"];
-type TimelineWorkEntry = Extract<TimelineEntry, { kind: "work" }>["entry"];
-type TimelineRow =
-  | {
-      kind: "work";
-      id: string;
-      createdAt: string;
-      groupedEntries: TimelineWorkEntry[];
-    }
-  | {
-      kind: "message";
-      id: string;
-      createdAt: string;
-      message: TimelineMessage;
-      showCompletionDivider: boolean;
-    }
-  | {
-      kind: "proposed-plan";
-      id: string;
-      createdAt: string;
-      proposedPlan: TimelineProposedPlan;
-    }
-  | { kind: "working"; id: string; createdAt: string | null };
-
-function estimateTimelineProposedPlanHeight(proposedPlan: TimelineProposedPlan): number {
-  const estimatedLines = Math.max(1, Math.ceil(proposedPlan.planMarkdown.length / 72));
-  return 120 + Math.min(estimatedLines * 22, 880);
-}
-
-const MessagesTimeline = memo(function MessagesTimeline({
-  hasMessages,
-  isWorking,
-  activeTurnInProgress,
-  activeTurnStartedAt,
-  scrollContainer,
-  timelineEntries,
-  completionDividerBeforeEntryId,
-  completionSummary,
-  turnDiffSummaryByAssistantMessageId,
-  nowIso,
-  expandedWorkGroups,
-  onToggleWorkGroup,
-  onOpenTurnDiff,
-  revertTurnCountByUserMessageId,
-  onRevertUserMessage,
-  isRevertingCheckpoint,
-  onImageExpand,
-  markdownCwd,
-  resolvedTheme,
-  workspaceRoot,
-  pinnedSelections,
-  onAskAboutSelectedText,
-  onPinSelectedText,
-  onRemovePinnedSelection,
-  pendingPinnedSelectionJumpId,
-  onPinnedSelectionJumpHandled,
-}: MessagesTimelineProps) {
-  const timelineRootRef = useRef<HTMLDivElement | null>(null);
-  const [timelineWidthPx, setTimelineWidthPx] = useState<number | null>(null);
-  const [selectionActionState, setSelectionActionState] =
-    useState<AssistantSelectionActionState | null>(null);
-  const [pinnedSelectionMarkers, setPinnedSelectionMarkers] = useState<PinnedSelectionMarker[]>([]);
-  const selectionActionStateRef = useRef<AssistantSelectionActionState | null>(null);
-  const selectionActionPointerDownRef = useRef(false);
-  const selectionActionFrameRef = useRef<number | null>(null);
-  const pinnedSelectionMarkerFrameRef = useRef<number | null>(null);
-  const pinnedSelectionMarkerScrollTimeoutRef = useRef<number | null>(null);
-  const isTimelineScrollingRef = useRef(false);
-
-  const clearSelectionAction = useCallback(() => {
-    selectionActionStateRef.current = null;
-    setSelectionActionState(null);
-  }, []);
-
-  const hidePinnedSelectionMarkers = useCallback(() => {
-    setPinnedSelectionMarkers([]);
-  }, []);
-
-  const updatePinnedSelectionMarkers = useCallback(() => {
-    if (typeof document === "undefined" || isTimelineScrollingRef.current) {
-      hidePinnedSelectionMarkers();
-      return;
-    }
-
-    const nextMarkers = pinnedSelections.flatMap((selection) => {
-      const selector = `[${CHAT_SELECTION_SOURCE_KIND_ATTRIBUTE}="${selection.sourceKind}"][${CHAT_SELECTION_SOURCE_ID_ATTRIBUTE}="${selection.sourceId}"]`;
-      const region = document.querySelector<HTMLElement>(selector);
-      if (!region || !region.isConnected) {
-        return [];
-      }
-      const range = reconstructRangeFromOffsets(
-        region,
-        selection.plainTextStart,
-        selection.plainTextEnd,
-      );
-      if (!range) {
-        return [];
-      }
-      const markerPosition = getPinnedSelectionMarkerPosition(range);
-      if (!markerPosition) {
-        return [];
-      }
-      return [
-        {
-          id: selection.id,
-          left: markerPosition.left,
-          top: markerPosition.top,
-          selectedText: selection.selectedText,
-        } satisfies PinnedSelectionMarker,
-      ];
-    });
-
-    setPinnedSelectionMarkers((previousMarkers) => {
-      if (
-        previousMarkers.length === nextMarkers.length &&
-        previousMarkers.every((marker, index) => {
-          const nextMarker = nextMarkers[index];
-          return (
-            nextMarker &&
-            nextMarker.id === marker.id &&
-            nextMarker.selectedText === marker.selectedText &&
-            Math.abs(nextMarker.left - marker.left) < 0.5 &&
-            Math.abs(nextMarker.top - marker.top) < 0.5
-          );
-        })
-      ) {
-        return previousMarkers;
-      }
-      return nextMarkers;
-    });
-  }, [hidePinnedSelectionMarkers, pinnedSelections]);
-
-  const updateSelectionActionState = useCallback(() => {
-    if (selectionActionPointerDownRef.current) {
-      return;
-    }
-
-    const selection = window.getSelection();
-    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
-      clearSelectionAction();
-      return;
-    }
-
-    const range = selection.getRangeAt(0);
-    const startRegion = getSelectionRegionElement(range.startContainer);
-    const endRegion = getSelectionRegionElement(range.endContainer);
-    if (!startRegion || startRegion !== endRegion || !startRegion.isConnected) {
-      clearSelectionAction();
-      return;
-    }
-
-    if (
-      isIgnoredSelectionTarget(range.startContainer) ||
-      isIgnoredSelectionTarget(range.endContainer) ||
-      isIgnoredSelectionTarget(range.commonAncestorContainer)
-    ) {
-      clearSelectionAction();
-      return;
-    }
-
-    const selectedText = selection.toString();
-    const normalizedSelectedText = normalizeSelectedText(selectedText);
-    if (!normalizedSelectedText) {
-      clearSelectionAction();
-      return;
-    }
-
-    const sourceKind = getSelectionSourceKind(startRegion);
-    const sourceId = getSelectionSourceId(startRegion);
-    const serializedRange = serializeRangeWithinContainer(startRegion, range);
-    if (!sourceKind || !sourceId || !serializedRange) {
-      clearSelectionAction();
-      return;
-    }
-
-    const anchorRect = getSelectionAnchorRect(range);
-    if (!anchorRect) {
-      clearSelectionAction();
-      return;
-    }
-
-    const nextState = {
-      selectedText: normalizedSelectedText,
-      sourceKind,
-      sourceId,
-      plainTextStart: serializedRange.plainTextStart,
-      plainTextEnd: serializedRange.plainTextEnd,
-      ...getSelectionActionPosition(anchorRect),
-    };
-
-    const previousState = selectionActionStateRef.current;
-    if (
-      previousState &&
-      previousState.selectedText === nextState.selectedText &&
-      Math.abs(previousState.left - nextState.left) < 0.5 &&
-      Math.abs(previousState.top - nextState.top) < 0.5 &&
-      previousState.sourceKind === nextState.sourceKind &&
-      previousState.sourceId === nextState.sourceId &&
-      previousState.plainTextStart === nextState.plainTextStart &&
-      previousState.plainTextEnd === nextState.plainTextEnd
-    ) {
-      return;
-    }
-
-    selectionActionStateRef.current = nextState;
-    setSelectionActionState(nextState);
-  }, [clearSelectionAction]);
-
-  const scheduleSelectionActionUpdate = useCallback(() => {
-    if (selectionActionFrameRef.current !== null) {
-      window.cancelAnimationFrame(selectionActionFrameRef.current);
-    }
-    selectionActionFrameRef.current = window.requestAnimationFrame(() => {
-      selectionActionFrameRef.current = null;
-      updateSelectionActionState();
-    });
-  }, [updateSelectionActionState]);
-
-  const schedulePinnedSelectionMarkersUpdate = useCallback(() => {
-    if (pinnedSelectionMarkerFrameRef.current !== null) {
-      window.cancelAnimationFrame(pinnedSelectionMarkerFrameRef.current);
-    }
-    pinnedSelectionMarkerFrameRef.current = window.requestAnimationFrame(() => {
-      pinnedSelectionMarkerFrameRef.current = null;
-      updatePinnedSelectionMarkers();
-    });
-  }, [updatePinnedSelectionMarkers]);
-
-  const schedulePinnedSelectionMarkersAfterScroll = useCallback(() => {
-    if (pinnedSelectionMarkerScrollTimeoutRef.current !== null) {
-      window.clearTimeout(pinnedSelectionMarkerScrollTimeoutRef.current);
-    }
-    isTimelineScrollingRef.current = true;
-    hidePinnedSelectionMarkers();
-    pinnedSelectionMarkerScrollTimeoutRef.current = window.setTimeout(() => {
-      pinnedSelectionMarkerScrollTimeoutRef.current = null;
-      isTimelineScrollingRef.current = false;
-      schedulePinnedSelectionMarkersUpdate();
-    }, CHAT_PIN_MARKER_SCROLL_SETTLE_MS);
-  }, [hidePinnedSelectionMarkers, schedulePinnedSelectionMarkersUpdate]);
-
-  useLayoutEffect(() => {
-    const timelineRoot = timelineRootRef.current;
-    if (!timelineRoot) return;
-
-    const updateWidth = (nextWidth: number) => {
-      setTimelineWidthPx((previousWidth) => {
-        if (previousWidth !== null && Math.abs(previousWidth - nextWidth) < 0.5) {
-          return previousWidth;
-        }
-        return nextWidth;
-      });
-    };
-
-    updateWidth(timelineRoot.getBoundingClientRect().width);
-
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => {
-      updateWidth(timelineRoot.getBoundingClientRect().width);
-    });
-    observer.observe(timelineRoot);
-    return () => {
-      observer.disconnect();
-    };
-  }, [hasMessages, isWorking]);
-
-  useEffect(() => {
-    const handleSelectionChange = () => {
-      scheduleSelectionActionUpdate();
-    };
-    const handlePointerUp = () => {
-      scheduleSelectionActionUpdate();
-    };
-    const handleResize = () => {
-      scheduleSelectionActionUpdate();
-      schedulePinnedSelectionMarkersUpdate();
-    };
-    const handleScroll = () => {
-      scheduleSelectionActionUpdate();
-      schedulePinnedSelectionMarkersAfterScroll();
-    };
-    const handlePointerDown = (event: PointerEvent) => {
-      const target = event.target instanceof Element ? event.target : null;
-      if (target?.closest("[data-chat-selection-action]")) {
-        return;
-      }
-      selectionActionPointerDownRef.current = false;
-    };
-
-    document.addEventListener("selectionchange", handleSelectionChange);
-    document.addEventListener("mouseup", handlePointerUp);
-    document.addEventListener("touchend", handlePointerUp);
-    document.addEventListener("pointerdown", handlePointerDown, true);
-    window.addEventListener("scroll", handleScroll, true);
-    window.addEventListener("resize", handleResize);
-
-    return () => {
-      document.removeEventListener("selectionchange", handleSelectionChange);
-      document.removeEventListener("mouseup", handlePointerUp);
-      document.removeEventListener("touchend", handlePointerUp);
-      document.removeEventListener("pointerdown", handlePointerDown, true);
-      window.removeEventListener("scroll", handleScroll, true);
-      window.removeEventListener("resize", handleResize);
-      if (selectionActionFrameRef.current !== null) {
-        window.cancelAnimationFrame(selectionActionFrameRef.current);
-        selectionActionFrameRef.current = null;
-      }
-      if (pinnedSelectionMarkerFrameRef.current !== null) {
-        window.cancelAnimationFrame(pinnedSelectionMarkerFrameRef.current);
-        pinnedSelectionMarkerFrameRef.current = null;
-      }
-      if (pinnedSelectionMarkerScrollTimeoutRef.current !== null) {
-        window.clearTimeout(pinnedSelectionMarkerScrollTimeoutRef.current);
-        pinnedSelectionMarkerScrollTimeoutRef.current = null;
-      }
-    };
-  }, [
-    schedulePinnedSelectionMarkersAfterScroll,
-    schedulePinnedSelectionMarkersUpdate,
-    scheduleSelectionActionUpdate,
-  ]);
-
-  const rows = useMemo<TimelineRow[]>(() => {
-    const nextRows: TimelineRow[] = [];
-
-    for (let index = 0; index < timelineEntries.length; index += 1) {
-      const timelineEntry = timelineEntries[index];
-      if (!timelineEntry) {
-        continue;
-      }
-
-      if (timelineEntry.kind === "work") {
-        const groupedEntries = [timelineEntry.entry];
-        let cursor = index + 1;
-        while (cursor < timelineEntries.length) {
-          const nextEntry = timelineEntries[cursor];
-          if (!nextEntry || nextEntry.kind !== "work") break;
-          groupedEntries.push(nextEntry.entry);
-          cursor += 1;
-        }
-        nextRows.push({
-          kind: "work",
-          id: timelineEntry.id,
-          createdAt: timelineEntry.createdAt,
-          groupedEntries,
-        });
-        index = cursor - 1;
-        continue;
-      }
-
-      if (timelineEntry.kind === "proposed-plan") {
-        nextRows.push({
-          kind: "proposed-plan",
-          id: timelineEntry.id,
-          createdAt: timelineEntry.createdAt,
-          proposedPlan: timelineEntry.proposedPlan,
-        });
-        continue;
-      }
-
-      nextRows.push({
-        kind: "message",
-        id: timelineEntry.id,
-        createdAt: timelineEntry.createdAt,
-        message: timelineEntry.message,
-        showCompletionDivider:
-          timelineEntry.message.role === "assistant" &&
-          completionDividerBeforeEntryId === timelineEntry.id,
-      });
-    }
-
-    if (isWorking) {
-      nextRows.push({
-        kind: "working",
-        id: "working-indicator-row",
-        createdAt: activeTurnStartedAt,
-      });
-    }
-
-    return nextRows;
-  }, [timelineEntries, completionDividerBeforeEntryId, isWorking, activeTurnStartedAt]);
-
-  useEffect(() => {
-    scheduleSelectionActionUpdate();
-    schedulePinnedSelectionMarkersUpdate();
-  }, [schedulePinnedSelectionMarkersUpdate, scheduleSelectionActionUpdate, timelineEntries]);
-
-  useEffect(() => {
-    schedulePinnedSelectionMarkersUpdate();
-  }, [pinnedSelections, schedulePinnedSelectionMarkersUpdate]);
-
-  const firstUnvirtualizedRowIndex = useMemo(() => {
-    const firstTailRowIndex = Math.max(rows.length - ALWAYS_UNVIRTUALIZED_TAIL_ROWS, 0);
-    if (!activeTurnInProgress) return firstTailRowIndex;
-
-    const turnStartedAtMs =
-      typeof activeTurnStartedAt === "string" ? Date.parse(activeTurnStartedAt) : Number.NaN;
-    let firstCurrentTurnRowIndex = -1;
-    if (!Number.isNaN(turnStartedAtMs)) {
-      firstCurrentTurnRowIndex = rows.findIndex((row) => {
-        if (row.kind === "working") return true;
-        if (!row.createdAt) return false;
-        const rowCreatedAtMs = Date.parse(row.createdAt);
-        return !Number.isNaN(rowCreatedAtMs) && rowCreatedAtMs >= turnStartedAtMs;
-      });
-    }
-
-    if (firstCurrentTurnRowIndex < 0) {
-      firstCurrentTurnRowIndex = rows.findIndex(
-        (row) => row.kind === "message" && row.message.streaming,
-      );
-    }
-
-    if (firstCurrentTurnRowIndex < 0) return firstTailRowIndex;
-
-    for (let index = firstCurrentTurnRowIndex - 1; index >= 0; index -= 1) {
-      const previousRow = rows[index];
-      if (!previousRow || previousRow.kind !== "message") continue;
-      if (previousRow.message.role === "user") {
-        return Math.min(index, firstTailRowIndex);
-      }
-      if (previousRow.message.role === "assistant" && !previousRow.message.streaming) {
-        break;
-      }
-    }
-
-    return Math.min(firstCurrentTurnRowIndex, firstTailRowIndex);
-  }, [activeTurnInProgress, activeTurnStartedAt, rows]);
-
-  const virtualizedRowCount = clamp(firstUnvirtualizedRowIndex, {
-    minimum: 0,
-    maximum: rows.length,
-  });
-
-  const rowVirtualizer = useVirtualizer({
-    count: virtualizedRowCount,
-    getScrollElement: () => scrollContainer,
-    // Use stable row ids so virtual measurements do not leak across thread switches.
-    getItemKey: (index: number) => rows[index]?.id ?? index,
-    estimateSize: (index: number) => {
-      const row = rows[index];
-      if (!row) return 96;
-      if (row.kind === "work") return 112;
-      if (row.kind === "proposed-plan") return estimateTimelineProposedPlanHeight(row.proposedPlan);
-      if (row.kind === "working") return 40;
-      return estimateTimelineMessageHeight(row.message, { timelineWidthPx });
-    },
-    measureElement: measureVirtualElement,
-    useAnimationFrameWithResizeObserver: true,
-    overscan: 8,
-  });
-  useEffect(() => {
-    if (timelineWidthPx === null) return;
-    rowVirtualizer.measure();
-  }, [rowVirtualizer, timelineWidthPx]);
-  useEffect(() => {
-    rowVirtualizer.shouldAdjustScrollPositionOnItemSizeChange = (_item, _delta, instance) => {
-      const viewportHeight = instance.scrollRect?.height ?? 0;
-      const scrollOffset = instance.scrollOffset ?? 0;
-      const remainingDistance = instance.getTotalSize() - (scrollOffset + viewportHeight);
-      return remainingDistance > AUTO_SCROLL_BOTTOM_THRESHOLD_PX;
-    };
-    return () => {
-      rowVirtualizer.shouldAdjustScrollPositionOnItemSizeChange = undefined;
-    };
-  }, [rowVirtualizer]);
-  const pendingMeasureFrameRef = useRef<number | null>(null);
-  const onTimelineImageLoad = useCallback(() => {
-    if (pendingMeasureFrameRef.current !== null) return;
-    pendingMeasureFrameRef.current = window.requestAnimationFrame(() => {
-      pendingMeasureFrameRef.current = null;
-      rowVirtualizer.measure();
-    });
-  }, [rowVirtualizer]);
-  useEffect(() => {
-    return () => {
-      const frame = pendingMeasureFrameRef.current;
-      if (frame !== null) {
-        window.cancelAnimationFrame(frame);
-      }
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!pendingPinnedSelectionJumpId) {
-      return;
-    }
-    const selection = pinnedSelections.find((entry) => entry.id === pendingPinnedSelectionJumpId);
-    if (!selection) {
-      onPinnedSelectionJumpHandled(pendingPinnedSelectionJumpId);
-      return;
-    }
-
-    const rowIndex = rows.findIndex((row) => {
-      if (row.kind === "message" && row.message.role === "assistant") {
-        return selection.sourceKind === "assistant-message" && row.message.id === selection.sourceId;
-      }
-      if (row.kind === "proposed-plan") {
-        return selection.sourceKind === "proposed-plan" && row.proposedPlan.id === selection.sourceId;
-      }
-      return false;
-    });
-
-    if (rowIndex >= 0) {
-      if (rowIndex < virtualizedRowCount) {
-        rowVirtualizer.scrollToIndex(rowIndex, { align: "center" });
-      } else {
-        const rowElement = timelineRootRef.current?.querySelector<HTMLElement>(
-          `[data-message-id="${selection.sourceId}"], [data-proposed-plan-id="${selection.sourceId}"]`,
-        );
-        rowElement?.scrollIntoView({ block: "center", behavior: "smooth" });
-      }
-    }
-
-    let attempts = 0;
-    let frame: number | null = null;
-
-    const tryScrollToSelection = () => {
-      attempts += 1;
-      const selector = `[${CHAT_SELECTION_SOURCE_KIND_ATTRIBUTE}="${selection.sourceKind}"][${CHAT_SELECTION_SOURCE_ID_ATTRIBUTE}="${selection.sourceId}"]`;
-      const region = document.querySelector<HTMLElement>(selector);
-      const range =
-        region &&
-        reconstructRangeFromOffsets(region, selection.plainTextStart, selection.plainTextEnd);
-      if (range && scrollContainer && scrollRangeIntoContainerView(range, scrollContainer)) {
-        onPinnedSelectionJumpHandled(selection.id);
-        return;
-      }
-      if (attempts >= 8) {
-        onPinnedSelectionJumpHandled(selection.id);
-        return;
-      }
-      frame = window.requestAnimationFrame(tryScrollToSelection);
-    };
-
-    frame = window.requestAnimationFrame(tryScrollToSelection);
-
-    return () => {
-      if (frame !== null) {
-        window.cancelAnimationFrame(frame);
-      }
-    };
-  }, [
-    scrollContainer,
-    onPinnedSelectionJumpHandled,
-    pendingPinnedSelectionJumpId,
-    pinnedSelections,
-    rowVirtualizer,
-    rows,
-    virtualizedRowCount,
-  ]);
-
-  const onSelectionActionPointerDown = useCallback(
-    (event: ReactPointerEvent<HTMLButtonElement>) => {
-      selectionActionPointerDownRef.current = true;
-      event.preventDefault();
-      event.stopPropagation();
-    },
-    [],
-  );
-  const clearNativeTextSelection = useCallback(() => {
-    selectionActionPointerDownRef.current = false;
-    clearSelectionAction();
-    window.getSelection()?.removeAllRanges();
-  }, [clearSelectionAction]);
-
-  const onSelectionActionQuoteClick = useCallback(() => {
-    const selectedText = selectionActionStateRef.current?.selectedText;
-    clearNativeTextSelection();
-    if (!selectedText) {
-      return;
-    }
-    onAskAboutSelectedText(selectedText);
-  }, [clearNativeTextSelection, onAskAboutSelectedText]);
-
-  const onSelectionActionPinClick = useCallback(() => {
-    const selection = selectionActionStateRef.current;
-    clearNativeTextSelection();
-    if (!selection) {
-      return;
-    }
-    onPinSelectedText({
-      sourceKind: selection.sourceKind,
-      sourceId: selection.sourceId,
-      selectedText: selection.selectedText,
-      plainTextStart: selection.plainTextStart,
-      plainTextEnd: selection.plainTextEnd,
-    });
-  }, [clearNativeTextSelection, onPinSelectedText]);
-
-  const selectionActionOverlay =
-    selectionActionState && typeof document !== "undefined"
-      ? createPortal(
-          <div className="pointer-events-none fixed inset-0 z-50">
-            <div
-              className="pointer-events-auto fixed flex h-9 items-center gap-1 rounded-full border border-border/80 bg-card/95 px-1.5 text-foreground shadow-lg/20 backdrop-blur-sm"
-              style={{
-                left: `${selectionActionState.left}px`,
-                top: `${selectionActionState.top}px`,
-              }}
-            >
-              <Button
-                aria-label={CHAT_SELECTION_QUOTE_ACTION_LABEL}
-                data-chat-selection-action="quote"
-                variant="ghost"
-                size="icon-xs"
-                className="size-7 rounded-full"
-                onPointerDown={onSelectionActionPointerDown}
-                onClick={onSelectionActionQuoteClick}
-              >
-                <span aria-hidden="true" className="font-serif text-sm leading-none opacity-80">
-                  "
-                </span>
-              </Button>
-              <Button
-                aria-label={CHAT_SELECTION_PIN_ACTION_LABEL}
-                data-chat-selection-action="pin"
-                variant="ghost"
-                size="icon-xs"
-                className="size-7 rounded-full"
-                onPointerDown={onSelectionActionPointerDown}
-                onClick={onSelectionActionPinClick}
-              >
-                <PinIcon className="size-3.5" />
-              </Button>
-            </div>
-          </div>,
-          document.body,
-        )
-      : null;
-
-  const pinnedSelectionMarkersOverlay =
-    pinnedSelectionMarkers.length > 0 && typeof document !== "undefined"
-      ? createPortal(
-          <div className="pointer-events-none fixed inset-0 z-40">
-            {pinnedSelectionMarkers.map((marker, index) => (
-              <Tooltip key={`pinned-selection-marker:${marker.id}`}>
-                <TooltipTrigger
-                  render={
-                    <button
-                      type="button"
-                      data-chat-selection-ignore="true"
-                      className="pointer-events-auto fixed inline-flex size-6 items-center justify-center rounded-full border border-border/70 bg-card/95 text-[10px] font-medium text-foreground shadow-md/20 backdrop-blur-sm transition-colors hover:bg-card"
-                      style={{
-                        left: `${marker.left}px`,
-                        top: `${marker.top}px`,
-                      }}
-                      onClick={() => onRemovePinnedSelection(marker.id)}
-                      aria-label={`Remove pinned passage ${index + 1}`}
-                    >
-                      <PinIcon className="size-3" />
-                    </button>
-                  }
-                />
-                <TooltipPopup side="top" className="max-w-64 whitespace-normal leading-tight">
-                  {marker.selectedText}
-                </TooltipPopup>
-              </Tooltip>
-            ))}
-          </div>,
-          document.body,
-        )
-      : null;
-
-  const virtualRows = rowVirtualizer.getVirtualItems();
-  const nonVirtualizedRows = rows.slice(virtualizedRowCount);
-  const [allDirectoriesExpandedByTurnId, setAllDirectoriesExpandedByTurnId] = useState<
-    Record<string, boolean>
-  >({});
-  const onToggleAllDirectories = useCallback((turnId: TurnId) => {
-    setAllDirectoriesExpandedByTurnId((current) => ({
-      ...current,
-      [turnId]: !(current[turnId] ?? true),
-    }));
-  }, []);
-
-  const renderRowContent = (row: TimelineRow) => (
-    <div
-      className="pb-4"
-      data-timeline-row-kind={row.kind}
-      data-message-id={row.kind === "message" ? row.message.id : undefined}
-      data-message-role={row.kind === "message" ? row.message.role : undefined}
-      data-proposed-plan-id={row.kind === "proposed-plan" ? row.proposedPlan.id : undefined}
-    >
-      {row.kind === "work" &&
-        (() => {
-          const groupId = row.id;
-          const groupedEntries = row.groupedEntries;
-          const isExpanded = expandedWorkGroups[groupId] ?? false;
-          const hasOverflow = groupedEntries.length > MAX_VISIBLE_WORK_LOG_ENTRIES;
-          const visibleEntries =
-            hasOverflow && !isExpanded
-              ? groupedEntries.slice(-MAX_VISIBLE_WORK_LOG_ENTRIES)
-              : groupedEntries;
-          const hiddenCount = groupedEntries.length - visibleEntries.length;
-          const onlyToolEntries = groupedEntries.every((entry) => entry.tone === "tool");
-          const groupLabel = onlyToolEntries
-            ? groupedEntries.length === 1
-              ? "Tool call"
-              : `Tool calls (${groupedEntries.length})`
-            : groupedEntries.length === 1
-              ? "Work event"
-              : `Work log (${groupedEntries.length})`;
-
-          return (
-            <div className="rounded-lg border border-border/80 bg-card/45 px-3 py-2">
-              <div className="mb-1.5 flex items-center justify-between gap-3">
-                <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground/65">
-                  {groupLabel}
-                </p>
-                {hasOverflow && (
-                  <button
-                    type="button"
-                    className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground/55 transition-colors duration-150 hover:text-muted-foreground/80"
-                    onClick={() => onToggleWorkGroup(groupId)}
-                  >
-                    {isExpanded ? "Show less" : `Show ${hiddenCount} more`}
-                  </button>
-                )}
-              </div>
-              <div className="space-y-1">
-                {visibleEntries.map((workEntry) => (
-                  <div key={`work-row:${workEntry.id}`} className="flex items-start gap-2 py-0.5">
-                    <span className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-muted-foreground/30" />
-                    <p
-                      className={`py-[2px] text-[11px] leading-relaxed ${workToneClass(workEntry.tone)}`}
-                    >
-                      {workEntry.detail ? (
-                        <>
-                          {workEntry.label}
-                          <span
-                            className="ml-1.5 inline-block max-w-[70ch] truncate align-bottom font-mono text-[11px] opacity-60"
-                            title={workEntry.detail}
-                          >
-                            {workEntry.detail}
-                          </span>
-                        </>
-                      ) : (
-                        workEntry.label
-                      )}
-                    </p>
-                  </div>
-                ))}
-              </div>
-            </div>
-          );
-        })()}
-
-      {row.kind === "message" &&
-        row.message.role === "user" &&
-        (() => {
-          const userImages = row.message.attachments ?? [];
-          const canRevertAgentWork = revertTurnCountByUserMessageId.has(row.message.id);
-          return (
-            <div className="flex justify-end">
-              <div className="group flex min-w-0 max-w-[80%] flex-col items-end">
-                <div
-                  data-user-message-bubble="true"
-                  className="relative w-full rounded-2xl rounded-br-sm border border-border bg-secondary px-3 py-2"
-                >
-                  {userImages.length > 0 && (
-                    <div className="mb-1.5 grid max-w-[420px] grid-cols-2 gap-1.5">
-                      {userImages.map(
-                        (image: NonNullable<TimelineMessage["attachments"]>[number]) => (
-                          <div
-                            key={image.id}
-                            className="overflow-hidden rounded-lg border border-border/80 bg-background/70"
-                          >
-                            {image.previewUrl ? (
-                              <button
-                                type="button"
-                                className="h-full w-full cursor-zoom-in"
-                                aria-label={`Preview ${image.name}`}
-                                onClick={() => {
-                                  const preview = buildExpandedImagePreview(userImages, image.id);
-                                  if (!preview) return;
-                                  onImageExpand(preview);
-                                }}
-                              >
-                                <img
-                                  src={image.previewUrl}
-                                  alt={image.name}
-                                  className="h-full max-h-[220px] w-full object-cover"
-                                  onLoad={onTimelineImageLoad}
-                                  onError={onTimelineImageLoad}
-                                />
-                              </button>
-                            ) : (
-                              <div className="flex min-h-[72px] items-center justify-center px-2 py-2.5 text-center text-[11px] text-muted-foreground/70">
-                                {image.name}
-                              </div>
-                            )}
-                          </div>
-                        ),
-                      )}
-                    </div>
-                  )}
-                  {row.message.text && (
-                    <ChatMarkdown
-                      text={row.message.text}
-                      cwd={markdownCwd}
-                      isStreaming={false}
-                      variant="user"
-                    />
-                  )}
-                </div>
-                <div
-                  data-user-message-footer="true"
-                  className="mt-1 flex w-full items-center justify-end gap-2 px-1"
-                >
-                  <div className="flex items-center gap-1.5 opacity-0 transition-opacity duration-200 focus-within:opacity-100 group-hover:opacity-100">
-                    {row.message.text && <MessageCopyButton text={row.message.text} />}
-                    {canRevertAgentWork && (
-                      <Button
-                        type="button"
-                        size="xs"
-                        variant="outline"
-                        disabled={isRevertingCheckpoint || isWorking}
-                        onClick={() => onRevertUserMessage(row.message.id)}
-                        title="Revert to this message"
-                      >
-                        <Undo2Icon className="size-3" />
-                      </Button>
-                    )}
-                  </div>
-                  <p className="text-right text-[10px] text-muted-foreground/30">
-                    {formatTimestamp(row.message.createdAt)}
-                  </p>
-                </div>
-              </div>
-            </div>
-          );
-        })()}
-
-      {row.kind === "message" &&
-        row.message.role === "assistant" &&
-        (() => {
-          const messageText = row.message.text || (row.message.streaming ? "" : "(empty response)");
-          return (
-            <>
-              {row.showCompletionDivider && (
-                <div className="my-3 flex items-center gap-3">
-                  <span className="h-px flex-1 bg-border" />
-                  <span className="rounded-full border border-border bg-background px-2.5 py-1 text-[10px] uppercase tracking-[0.14em] text-muted-foreground/80">
-                    {completionSummary ? `Response • ${completionSummary}` : "Response"}
-                  </span>
-                  <span className="h-px flex-1 bg-border" />
-                </div>
-              )}
-              <div className="min-w-0 px-1 py-0.5">
-                <div
-                  {...{
-                    [CHAT_SELECTION_REGION_ATTRIBUTE]: CHAT_SELECTION_REGION_VALUE,
-                    [CHAT_SELECTION_SOURCE_KIND_ATTRIBUTE]: "assistant-message",
-                    [CHAT_SELECTION_SOURCE_ID_ATTRIBUTE]: row.message.id,
-                  }}
-                >
-                  <ChatMarkdown
-                    text={messageText}
-                    cwd={markdownCwd}
-                    isStreaming={Boolean(row.message.streaming)}
-                  />
-                </div>
-                {(() => {
-                  const turnSummary = turnDiffSummaryByAssistantMessageId.get(row.message.id);
-                  if (!turnSummary) return null;
-                  const checkpointFiles = turnSummary.files;
-                  if (checkpointFiles.length === 0) return null;
-                  const summaryStat = summarizeTurnDiffStats(checkpointFiles);
-                  const changedFileCountLabel = String(checkpointFiles.length);
-                  const allDirectoriesExpanded =
-                    allDirectoriesExpandedByTurnId[turnSummary.turnId] ?? true;
-                  return (
-                    <div className="mt-2 rounded-lg border border-border/80 bg-card/45 p-2.5">
-                      <div className="mb-1.5 flex items-center justify-between gap-2">
-                        <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground/65">
-                          <span>Changed files ({changedFileCountLabel})</span>
-                          {hasNonZeroStat(summaryStat) && (
-                            <>
-                              <span className="mx-1">•</span>
-                              <DiffStatLabel
-                                additions={summaryStat.additions}
-                                deletions={summaryStat.deletions}
-                              />
-                            </>
-                          )}
-                        </p>
-                        <div className="flex items-center gap-1.5">
-                          <Button
-                            type="button"
-                            size="xs"
-                            variant="outline"
-                            onClick={() => onToggleAllDirectories(turnSummary.turnId)}
-                          >
-                            {allDirectoriesExpanded ? "Collapse all" : "Expand all"}
-                          </Button>
-                          <Button
-                            type="button"
-                            size="xs"
-                            variant="outline"
-                            onClick={() =>
-                              onOpenTurnDiff(turnSummary.turnId, checkpointFiles[0]?.path)
-                            }
-                          >
-                            View diff
-                          </Button>
-                        </div>
-                      </div>
-                      <ChangedFilesTree
-                        key={`changed-files-tree:${turnSummary.turnId}`}
-                        turnId={turnSummary.turnId}
-                        files={checkpointFiles}
-                        allDirectoriesExpanded={allDirectoriesExpanded}
-                        resolvedTheme={resolvedTheme}
-                        onOpenTurnDiff={onOpenTurnDiff}
-                      />
-                    </div>
-                  );
-                })()}
-                <p className="mt-1.5 text-[10px] text-muted-foreground/30">
-                  {formatMessageMeta(
-                    row.message.createdAt,
-                    row.message.streaming
-                      ? formatElapsed(row.message.createdAt, nowIso)
-                      : formatElapsed(row.message.createdAt, row.message.completedAt),
-                  )}
-                </p>
-              </div>
-            </>
-          );
-        })()}
-
-      {row.kind === "proposed-plan" && (
-        <div className="min-w-0 px-1 py-0.5">
-          <ProposedPlanCard
-            sourceId={row.proposedPlan.id}
-            planMarkdown={row.proposedPlan.planMarkdown}
-            cwd={markdownCwd}
-            workspaceRoot={workspaceRoot}
-          />
-        </div>
-      )}
-
-      {row.kind === "working" && (
-        <div className="flex items-center gap-2 py-0.5 pl-1.5">
-          <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-muted-foreground/30" />
-          <div className="flex items-center pt-1">
-            <span className="inline-flex items-center gap-[3px]">
-              <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-pulse" />
-              <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-pulse [animation-delay:200ms]" />
-              <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-pulse [animation-delay:400ms]" />
-            </span>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-
-  if (!hasMessages && !isWorking) {
-    return (
-      <div className="flex h-full items-center justify-center">
-        <p className="text-sm text-muted-foreground/30">
-          Send a message to start the conversation.
-        </p>
-      </div>
-    );
-  }
-
-  return (
-    <div
-      ref={timelineRootRef}
-      data-timeline-root="true"
-      className="mx-auto w-full min-w-0 max-w-3xl overflow-x-hidden"
-    >
-      {virtualizedRowCount > 0 && (
-        <div className="relative" style={{ height: `${rowVirtualizer.getTotalSize()}px` }}>
-          {virtualRows.map((virtualRow: VirtualItem) => {
-            const row = rows[virtualRow.index];
-            if (!row) return null;
-
-            return (
-              <div
-                key={`virtual-row:${row.id}`}
-                data-index={virtualRow.index}
-                ref={rowVirtualizer.measureElement}
-                className="absolute left-0 top-0 w-full"
-                style={{ transform: `translateY(${virtualRow.start}px)` }}
-              >
-                {renderRowContent(row)}
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {nonVirtualizedRows.map((row) => (
-        <div key={`non-virtual-row:${row.id}`}>{renderRowContent(row)}</div>
-      ))}
-      {selectionActionOverlay}
-      {pinnedSelectionMarkersOverlay}
     </div>
   );
 });

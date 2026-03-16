@@ -1,7 +1,14 @@
 import {
+  ChevronDownIcon,
   ChevronRightIcon,
+  CircleUserRoundIcon,
+  ExternalLinkIcon,
   FolderIcon,
+  GaugeIcon,
   GitPullRequestIcon,
+  LoaderCircleIcon,
+  LogOutIcon,
+  PinIcon,
   RocketIcon,
   SettingsIcon,
   SquarePenIcon,
@@ -13,6 +20,8 @@ import {
   DEFAULT_MODEL_BY_PROVIDER,
   type DesktopUpdateState,
   ProjectId,
+  type ServerProviderAccountSummary,
+  type ServerProviderRateLimitWindow,
   ThreadId,
   type GitStatusResult,
   type ResolvedKeybindingsConfig,
@@ -28,7 +37,7 @@ import { isChatNewLocalShortcut, isChatNewShortcut, shortcutLabelForCommand } fr
 import { type Thread } from "../types";
 import { derivePendingApprovals } from "../session-logic";
 import { gitRemoveWorktreeMutationOptions, gitStatusQueryOptions } from "../lib/gitReactQuery";
-import { serverConfigQueryOptions } from "../lib/serverReactQuery";
+import { serverConfigQueryOptions, serverQueryKeys } from "../lib/serverReactQuery";
 import { readNativeApi } from "../nativeApi";
 import { type DraftThreadEnvMode, useComposerDraftStore } from "../composerDraftStore";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
@@ -44,6 +53,7 @@ import {
 } from "./desktopUpdate.logic";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "./ui/collapsible";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
+import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import {
   SidebarContent,
   SidebarFooter,
@@ -86,6 +96,385 @@ function formatRelativeTime(iso: string): string {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
+function clampPercent(value: number): number {
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function getRemainingPercent(window: ServerProviderRateLimitWindow | null): number | null {
+  if (!window) {
+    return null;
+  }
+  return clampPercent(100 - window.usedPercent);
+}
+
+function formatRateLimitWindowLabel(windowDurationMins: number | null): string {
+  if (!windowDurationMins || windowDurationMins <= 0) {
+    return "Window";
+  }
+  if (windowDurationMins === 10_080) {
+    return "Weekly";
+  }
+  if (windowDurationMins % 60 === 0) {
+    return `${windowDurationMins / 60}h`;
+  }
+  return `${windowDurationMins} min`;
+}
+
+function formatRateLimitResetAt(resetsAt: string | null): string | null {
+  if (!resetsAt) {
+    return null;
+  }
+  const date = new Date(resetsAt);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  const now = new Date();
+  if (date.toDateString() === now.toDateString()) {
+    return new Intl.DateTimeFormat(undefined, {
+      hour: "numeric",
+      minute: "2-digit",
+    }).format(date);
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+  }).format(date);
+}
+
+function getSummaryRemainingPercent(
+  accountSummary: ServerProviderAccountSummary | null,
+): number | null {
+  if (!accountSummary) {
+    return null;
+  }
+  let lowestRemaining: number | null = null;
+  for (const bucket of accountSummary.rateLimits) {
+    const remainingPercents = [getRemainingPercent(bucket.primary), getRemainingPercent(bucket.secondary)];
+    for (const remaining of remainingPercents) {
+      if (remaining === null) {
+        continue;
+      }
+      if (lowestRemaining === null || remaining < lowestRemaining) {
+        lowestRemaining = remaining;
+      }
+    }
+  }
+  return lowestRemaining;
+}
+
+function getCodexAccountSummary(
+  providerAccounts: ReadonlyArray<ServerProviderAccountSummary> | undefined,
+): ServerProviderAccountSummary | null {
+  return providerAccounts?.find((providerAccount) => providerAccount.provider === "codex") ?? null;
+}
+
+interface SidebarSettingsPopoverProps {
+  pathname: string;
+  accountSummary: ServerProviderAccountSummary | null;
+  open: boolean;
+  startingLogin: boolean;
+  cancelingLogin: boolean;
+  loggingOut: boolean;
+  onOpenChange: (open: boolean) => void;
+  onNavigateToSettings: () => void;
+  onStartLogin: () => void;
+  onContinueLogin: (authUrl: string) => void;
+  onCancelLogin: (loginId: string) => void;
+  onLogout: () => void;
+}
+
+function SidebarSettingsPopover({
+  pathname,
+  accountSummary,
+  open,
+  startingLogin,
+  cancelingLogin,
+  loggingOut,
+  onOpenChange,
+  onNavigateToSettings,
+  onStartLogin,
+  onContinueLogin,
+  onCancelLogin,
+  onLogout,
+}: SidebarSettingsPopoverProps) {
+  const [rateLimitsOpen, setRateLimitsOpen] = useState(false);
+
+  useEffect(() => {
+    if (!open) {
+      setRateLimitsOpen(false);
+    }
+  }, [open]);
+
+  const rowClass =
+    "flex w-full items-center gap-2.5 px-3.5 py-2 text-left text-[13px] text-foreground transition-colors duration-150 hover:bg-accent/55";
+  const subtleRowClass =
+    "flex w-full items-center gap-2.5 px-3.5 py-2 text-left text-[13px] text-muted-foreground transition-colors duration-150 hover:bg-accent/55 hover:text-foreground";
+  const remainingPercent = getSummaryRemainingPercent(accountSummary);
+  const showRateLimits = (accountSummary?.rateLimits.length ?? 0) > 0;
+  const rateLimitBuckets = accountSummary?.rateLimits ?? [];
+  const loginState = accountSummary?.login;
+  const pendingAuthUrl = loginState?.status === "pending" ? loginState.authUrl : null;
+  const pendingLoginId = loginState?.status === "pending" ? loginState.loginId : null;
+  const isAuthenticated = accountSummary?.state === "authenticated";
+  const isUnauthenticated = accountSummary?.state === "unauthenticated";
+  const isLoading = accountSummary?.state === "loading";
+  const isError = accountSummary?.state === "error";
+
+  let title = "Not signed in";
+  let subtitle = "Sign in to view account and rate limits";
+  if (accountSummary?.account?.type === "chatgpt") {
+    title = accountSummary.account.email;
+    subtitle = "Personal account";
+  } else if (accountSummary?.account?.type === "apiKey") {
+    title = "API key";
+    subtitle = "Provider account";
+  } else if (isLoading) {
+    title = "Loading account";
+    subtitle = accountSummary?.message ?? "Checking your Codex account state";
+  } else if (isError) {
+    title = "Account unavailable";
+    subtitle = accountSummary?.message ?? "Unable to load Codex account details";
+  }
+
+  async function openExternalLink(url: string): Promise<void> {
+    try {
+      const api = readNativeApi();
+      if (api) {
+        await api.shell.openExternal(url);
+        return;
+      }
+      if (typeof window !== "undefined") {
+        window.open(url, "_blank", "noopener,noreferrer");
+      }
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Unable to open link",
+        description: getErrorMessage(error, "An error occurred opening the external link."),
+      });
+    }
+  }
+
+  return (
+    <Popover onOpenChange={onOpenChange} open={open}>
+      <PopoverTrigger
+        className={cn(
+          "flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors duration-150",
+          pathname === "/settings"
+            ? "bg-accent text-foreground"
+            : "hover:bg-accent/60 hover:text-foreground",
+        )}
+      >
+        <SettingsIcon className="size-4 shrink-0" />
+        <span>Settings</span>
+      </PopoverTrigger>
+      <PopoverPopup
+        side="top"
+        align="start"
+        sideOffset={8}
+        className="w-[292px] max-w-[calc(100vw-1rem)] rounded-[16px] border border-border/70 bg-popover/98 p-0 shadow-[0_14px_40px_rgba(0,0,0,0.3)] backdrop-blur-md"
+      >
+        <div className="-mx-4 -my-4 overflow-hidden rounded-[inherit] py-1.5">
+          <div className="px-3.5 py-2">
+            <div className="flex min-w-0 items-center gap-2.5 text-[13px] text-muted-foreground">
+              <CircleUserRoundIcon className="size-4 shrink-0" />
+              <span className="truncate">{title}</span>
+            </div>
+            <div className="mt-1.5 flex min-w-0 items-center gap-2.5 text-[13px] text-muted-foreground">
+              <SettingsIcon className="size-4 shrink-0" />
+              <span className="truncate">{subtitle}</span>
+            </div>
+          </div>
+
+          <div className="mx-3.5 border-t border-border/60" />
+          <button type="button" className={rowClass} onClick={onNavigateToSettings}>
+            <SettingsIcon className="size-4 shrink-0 text-muted-foreground" />
+            <span className="flex-1">Settings</span>
+          </button>
+
+          {showRateLimits && (
+            <>
+              <div className="mx-3.5 border-t border-border/60" />
+              <Collapsible onOpenChange={setRateLimitsOpen} open={rateLimitsOpen}>
+                <CollapsibleTrigger
+                  className={cn(
+                    rowClass,
+                    "items-center justify-between",
+                    rateLimitsOpen && "bg-accent/55",
+                  )}
+                >
+                  <div className="flex min-w-0 items-center gap-3">
+                    <GaugeIcon className="size-4 shrink-0 text-muted-foreground" />
+                    <span className="truncate">
+                      Rate limits remaining{" "}
+                      {remainingPercent !== null && (
+                        <span className="text-muted-foreground">{remainingPercent}%</span>
+                      )}
+                    </span>
+                  </div>
+                  {rateLimitsOpen ? (
+                    <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground" />
+                  ) : (
+                    <ChevronRightIcon className="size-4 shrink-0 text-muted-foreground" />
+                  )}
+                </CollapsibleTrigger>
+                <CollapsibleContent>
+                  <div className="space-y-2.5 px-3.5 pb-2.5 pt-0.5">
+                    {rateLimitBuckets.map((bucket, index) => {
+                      const showBucketLabel = rateLimitBuckets.length > 1;
+                      const bucketKey = [
+                        bucket.limitId ?? "rate-limit",
+                        bucket.limitName ?? "unnamed",
+                        bucket.planType ?? "unknown",
+                        bucket.primary?.windowDurationMins ?? "primary",
+                        bucket.secondary?.windowDurationMins ?? "secondary",
+                      ].join(":");
+
+                      return (
+                        <div key={bucketKey} className={cn("space-y-1.5", index > 0 && "pt-0.5")}>
+                          {showBucketLabel && (
+                            <div className="flex items-center gap-2 text-[11px] font-medium tracking-[0.12em] text-muted-foreground uppercase">
+                              <span>{bucket.limitName ?? bucket.limitId ?? `Rate limit ${index + 1}`}</span>
+                              {bucket.planType && <span>{bucket.planType}</span>}
+                            </div>
+                          )}
+
+                          {[
+                            { slot: "primary", window: bucket.primary },
+                            { slot: "secondary", window: bucket.secondary },
+                          ].map(({ slot, window }) => {
+                            if (!window) {
+                              return null;
+                            }
+                            const resetLabel = formatRateLimitResetAt(window.resetsAt);
+                            const label = formatRateLimitWindowLabel(window.windowDurationMins);
+                            const percent = getRemainingPercent(window);
+                            return (
+                              <div
+                                key={[
+                                  bucketKey,
+                                  slot,
+                                  window.windowDurationMins ?? "window",
+                                  window.resetsAt ?? "no-reset",
+                                ].join(":")}
+                                className="flex items-baseline justify-between gap-2 text-[13px]"
+                              >
+                                <span className="font-semibold text-foreground">{label}</span>
+                                <div className="flex items-baseline gap-2 text-muted-foreground">
+                                  <span>{percent !== null ? `${percent}%` : "--"}</span>
+                                  {resetLabel && <span>{resetLabel}</span>}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      );
+                    })}
+
+                    <button
+                      type="button"
+                      className={cn(subtleRowClass, "px-2.5 py-1.5 font-medium text-foreground")}
+                      onClick={() => void openExternalLink("https://chatgpt.com/#pricing")}
+                    >
+                      <span className="flex-1">Upgrade to Pro</span>
+                      <ExternalLinkIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                    </button>
+                    <button
+                      type="button"
+                      className={cn(subtleRowClass, "px-2.5 py-1.5 font-medium text-foreground")}
+                      onClick={() => void openExternalLink("https://help.openai.com/en/articles/9824962-openai-codex-cli-getting-started")}
+                    >
+                      <span className="flex-1">Learn more</span>
+                      <ExternalLinkIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                    </button>
+                  </div>
+                </CollapsibleContent>
+              </Collapsible>
+            </>
+          )}
+
+          <div className="mx-3.5 border-t border-border/60" />
+
+          {isUnauthenticated && loginState?.status !== "pending" && (
+            <button
+              type="button"
+              className={rowClass}
+              disabled={startingLogin}
+              onClick={onStartLogin}
+            >
+              {startingLogin ? (
+                <LoaderCircleIcon className="size-4 shrink-0 animate-spin text-muted-foreground" />
+              ) : (
+                <CircleUserRoundIcon className="size-4 shrink-0 text-muted-foreground" />
+              )}
+              <span>{loginState?.status === "failed" ? "Try again" : "Sign in"}</span>
+            </button>
+          )}
+
+          {pendingAuthUrl && (
+            <>
+              <button
+                type="button"
+                className={rowClass}
+                onClick={() => onContinueLogin(pendingAuthUrl)}
+              >
+                <CircleUserRoundIcon className="size-4 shrink-0 text-muted-foreground" />
+                <span className="flex-1">Continue sign in</span>
+                <ExternalLinkIcon className="size-3.5 shrink-0 text-muted-foreground" />
+              </button>
+              {pendingLoginId && (
+                <button
+                  type="button"
+                  className={subtleRowClass}
+                  disabled={cancelingLogin}
+                  onClick={() => onCancelLogin(pendingLoginId)}
+                >
+                  {cancelingLogin ? (
+                    <LoaderCircleIcon className="size-4 shrink-0 animate-spin" />
+                  ) : (
+                    <CircleUserRoundIcon className="size-4 shrink-0" />
+                  )}
+                  <span>Cancel sign in</span>
+                </button>
+              )}
+            </>
+          )}
+
+          {loginState?.status === "failed" && loginState.error && (
+            <div className="px-4 py-3 text-xs leading-relaxed text-muted-foreground">
+              {loginState.error}
+            </div>
+          )}
+
+          {isAuthenticated && (
+            <button
+              type="button"
+              className={rowClass}
+              disabled={loggingOut}
+              onClick={onLogout}
+            >
+              {loggingOut ? (
+                <LoaderCircleIcon className="size-4 shrink-0 animate-spin text-muted-foreground" />
+              ) : (
+                <LogOutIcon className="size-4 shrink-0 text-muted-foreground" />
+              )}
+              <span>Log out</span>
+            </button>
+          )}
+
+          {!isAuthenticated && !isUnauthenticated && !showRateLimits && (
+            <div className="px-4 py-3 text-xs leading-relaxed text-muted-foreground">
+              {accountSummary?.message ?? "Account details are not available yet."}
+            </div>
+          )}
+        </div>
+      </PopoverPopup>
+    </Popover>
+  );
+}
+
 interface ThreadStatusPill {
   label: "Working" | "Connecting" | "Completed" | "Pending Approval";
   colorClass: string;
@@ -117,6 +506,19 @@ function hasUnseenCompletion(thread: Thread): boolean {
   const lastVisitedAt = Date.parse(thread.lastVisitedAt);
   if (Number.isNaN(lastVisitedAt)) return true;
   return completedAt > lastVisitedAt;
+}
+
+function compareThreadsForSidebar(left: Thread, right: Thread): number {
+  if (left.isPinned !== right.isPinned) {
+    return left.isPinned ? -1 : 1;
+  }
+
+  const byDate = new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime();
+  if (byDate !== 0) {
+    return byDate;
+  }
+
+  return right.id.localeCompare(left.id);
 }
 
 function threadStatusPill(thread: Thread, hasPendingApprovals: boolean): ThreadStatusPill | null {
@@ -289,12 +691,11 @@ export default function Sidebar() {
     strict: false,
     select: (params) => (params.threadId ? ThreadId.makeUnsafe(params.threadId) : null),
   });
-  const { data: keybindings = EMPTY_KEYBINDINGS } = useQuery({
-    ...serverConfigQueryOptions(),
-    select: (config) => config.keybindings,
-  });
+  const { data: serverConfig } = useQuery(serverConfigQueryOptions());
+  const keybindings = serverConfig?.keybindings ?? EMPTY_KEYBINDINGS;
   const queryClient = useQueryClient();
   const removeWorktreeMutation = useMutation(gitRemoveWorktreeMutationOptions({ queryClient }));
+  const [settingsPopoverOpen, setSettingsPopoverOpen] = useState(false);
   const [addingProject, setAddingProject] = useState(false);
   const [newCwd, setNewCwd] = useState("");
   const [isPickingFolder, setIsPickingFolder] = useState(false);
@@ -307,6 +708,75 @@ export default function Sidebar() {
   const renamingCommittedRef = useRef(false);
   const renamingInputRef = useRef<HTMLInputElement | null>(null);
   const [desktopUpdateState, setDesktopUpdateState] = useState<DesktopUpdateState | null>(null);
+  const codexAccountSummary = useMemo(
+    () => getCodexAccountSummary(serverConfig?.providerAccounts),
+    [serverConfig?.providerAccounts],
+  );
+  const startProviderLoginMutation = useMutation({
+    mutationFn: async () => {
+      const api = readNativeApi();
+      if (!api) {
+        throw new Error("Native API is unavailable.");
+      }
+      const result = await api.server.startProviderLogin({
+        provider: "codex",
+        type: "chatgpt",
+      });
+      await api.shell.openExternal(result.authUrl);
+      return result;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: serverQueryKeys.config() });
+    },
+    onError: (error) => {
+      toastManager.add({
+        type: "error",
+        title: "Unable to start sign in",
+        description: getErrorMessage(error, "An error occurred starting the sign-in flow."),
+      });
+    },
+  });
+  const cancelProviderLoginMutation = useMutation({
+    mutationFn: async (loginId: string) => {
+      const api = readNativeApi();
+      if (!api) {
+        throw new Error("Native API is unavailable.");
+      }
+      return api.server.cancelProviderLogin({
+        provider: "codex",
+        loginId,
+      });
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: serverQueryKeys.config() });
+    },
+    onError: (error) => {
+      toastManager.add({
+        type: "error",
+        title: "Unable to cancel sign in",
+        description: getErrorMessage(error, "An error occurred canceling the sign-in flow."),
+      });
+    },
+  });
+  const logoutProviderMutation = useMutation({
+    mutationFn: async () => {
+      const api = readNativeApi();
+      if (!api) {
+        throw new Error("Native API is unavailable.");
+      }
+      return api.server.logoutProvider({ provider: "codex" });
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: serverQueryKeys.config() });
+    },
+    onError: (error) => {
+      toastManager.add({
+        type: "error",
+        title: "Unable to log out",
+        description: getErrorMessage(error, "An error occurred logging out."),
+      });
+    },
+  });
   const pendingApprovalByThreadId = useMemo(() => {
     const map = new Map<ThreadId, boolean>();
     for (const thread of threads) {
@@ -387,6 +857,39 @@ export default function Sidebar() {
       });
     });
   }, []);
+  const handleNavigateToSettings = useCallback(() => {
+    setSettingsPopoverOpen(false);
+    void navigate({ to: "/settings" });
+  }, [navigate]);
+  const handleContinueProviderLogin = useCallback((authUrl: string) => {
+    const api = readNativeApi();
+    if (!api) {
+      toastManager.add({
+        type: "error",
+        title: "Sign in is unavailable.",
+      });
+      return;
+    }
+    void api.shell.openExternal(authUrl).catch((error) => {
+      toastManager.add({
+        type: "error",
+        title: "Unable to continue sign in",
+        description: getErrorMessage(error, "An error occurred reopening the sign-in flow."),
+      });
+    });
+  }, []);
+  const handleStartProviderLogin = useCallback(() => {
+    startProviderLoginMutation.mutate();
+  }, [startProviderLoginMutation]);
+  const handleCancelProviderLogin = useCallback(
+    (loginId: string) => {
+      cancelProviderLoginMutation.mutate(loginId);
+    },
+    [cancelProviderLoginMutation],
+  );
+  const handleLogoutProvider = useCallback(() => {
+    logoutProviderMutation.mutate();
+  }, [logoutProviderMutation]);
 
   const handleNewThread = useCallback(
     (
@@ -629,26 +1132,62 @@ export default function Sidebar() {
     [],
   );
 
+  const handleSetThreadPinned = useCallback(async (threadId: ThreadId, isPinned: boolean) => {
+    const api = readNativeApi();
+    if (!api) {
+      return;
+    }
+
+    try {
+      await api.orchestration.dispatchCommand({
+        type: "thread.meta.update",
+        commandId: newCommandId(),
+        threadId,
+        isPinned,
+      });
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: isPinned ? "Failed to pin thread" : "Failed to unpin thread",
+        description: error instanceof Error ? error.message : "An error occurred.",
+      });
+    }
+  }, []);
+
   const handleThreadContextMenu = useCallback(
     async (threadId: ThreadId, position: { x: number; y: number }) => {
       const api = readNativeApi();
       if (!api) return;
+      const thread = threads.find((t) => t.id === threadId);
+      if (!thread) return;
       const clicked = await api.contextMenu.show(
         [
           { id: "rename", label: "Rename thread" },
+          {
+            id: thread.isPinned ? "unpin" : "pin",
+            label: thread.isPinned ? "Unpin thread" : "Pin thread",
+          },
           { id: "mark-unread", label: "Mark unread" },
           { id: "copy-thread-id", label: "Copy Thread ID" },
           { id: "delete", label: "Delete", destructive: true },
         ],
         position,
       );
-      const thread = threads.find((t) => t.id === threadId);
-      if (!thread) return;
 
       if (clicked === "rename") {
         setRenamingThreadId(threadId);
         setRenamingTitle(thread.title);
         renamingCommittedRef.current = false;
+        return;
+      }
+
+      if (clicked === "pin") {
+        await handleSetThreadPinned(threadId, true);
+        return;
+      }
+
+      if (clicked === "unpin") {
+        await handleSetThreadPinned(threadId, false);
         return;
       }
 
@@ -774,6 +1313,7 @@ export default function Sidebar() {
       clearComposerDraftForThread,
       clearProjectDraftThreadById,
       clearTerminalState,
+      handleSetThreadPinned,
       markThreadUnread,
       navigate,
       projects,
@@ -1119,11 +1659,7 @@ export default function Sidebar() {
             {projects.map((project) => {
               const projectThreads = threads
                 .filter((thread) => thread.projectId === project.id)
-                .toSorted((a, b) => {
-                  const byDate = new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-                  if (byDate !== 0) return byDate;
-                  return b.id.localeCompare(a.id);
-                });
+                .toSorted(compareThreadsForSidebar);
               const isThreadListExpanded = expandedThreadListsByProject.has(project.id);
               const hasHiddenThreads = projectThreads.length > THREAD_PREVIEW_LIMIT;
               const visibleThreads =
@@ -1277,6 +1813,9 @@ export default function Sidebar() {
                                       <span className="hidden md:inline">{threadStatus.label}</span>
                                     </span>
                                   )}
+                                  {thread.isPinned && (
+                                    <PinIcon className="size-3 shrink-0 text-muted-foreground/65" />
+                                  )}
                                   {renamingThreadId === thread.id ? (
                                     <input
                                       ref={(el) => {
@@ -1388,21 +1927,20 @@ export default function Sidebar() {
 
       <SidebarSeparator />
       <SidebarFooter className="gap-2 p-3">
-        <button
-          type="button"
-          className={cn(
-            "flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors duration-150",
-            pathname === "/settings"
-              ? "bg-accent text-foreground"
-              : "hover:bg-accent/60 hover:text-foreground",
-          )}
-          onClick={() => {
-            void navigate({ to: "/settings" });
-          }}
-        >
-          <SettingsIcon className="size-4 shrink-0" />
-          <span>Settings</span>
-        </button>
+        <SidebarSettingsPopover
+          pathname={pathname}
+          accountSummary={codexAccountSummary}
+          open={settingsPopoverOpen}
+          startingLogin={startProviderLoginMutation.isPending}
+          cancelingLogin={cancelProviderLoginMutation.isPending}
+          loggingOut={logoutProviderMutation.isPending}
+          onOpenChange={setSettingsPopoverOpen}
+          onNavigateToSettings={handleNavigateToSettings}
+          onStartLogin={handleStartProviderLogin}
+          onContinueLogin={handleContinueProviderLogin}
+          onCancelLogin={handleCancelProviderLogin}
+          onLogout={handleLogoutProvider}
+        />
       </SidebarFooter>
     </>
   );

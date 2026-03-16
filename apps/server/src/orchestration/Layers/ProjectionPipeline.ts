@@ -427,6 +427,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             interactionMode: event.payload.interactionMode,
             branch: event.payload.branch,
             worktreePath: event.payload.worktreePath,
+            isPinned: event.payload.isPinned,
             latestTurnId: null,
             createdAt: event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
@@ -445,6 +446,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             ...existingRow.value,
             ...(event.payload.title !== undefined ? { title: event.payload.title } : {}),
             ...(event.payload.model !== undefined ? { model: event.payload.model } : {}),
+            ...(event.payload.isPinned !== undefined ? { isPinned: event.payload.isPinned } : {}),
             ...(event.payload.branch !== undefined ? { branch: event.payload.branch } : {}),
             ...(event.payload.worktreePath !== undefined
               ? { worktreePath: event.payload.worktreePath }
@@ -777,6 +779,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           yield* projectionTurnRepository.replacePendingTurnStart({
             threadId: event.payload.threadId,
             messageId: event.payload.messageId,
+            interactionMode: event.payload.interactionMode,
             requestedAt: event.payload.createdAt,
           });
           return;
@@ -806,6 +809,11 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
               pendingMessageId:
                 existingTurn.value.pendingMessageId ??
                 (Option.isSome(pendingTurnStart) ? pendingTurnStart.value.messageId : null),
+              interactionMode:
+                existingTurn.value.interactionMode !== "default" ||
+                !Option.isSome(pendingTurnStart)
+                  ? existingTurn.value.interactionMode
+                  : pendingTurnStart.value.interactionMode,
               startedAt:
                 existingTurn.value.startedAt ??
                 (Option.isSome(pendingTurnStart)
@@ -825,6 +833,9 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
                 ? pendingTurnStart.value.messageId
                 : null,
               assistantMessageId: null,
+              interactionMode: Option.isSome(pendingTurnStart)
+                ? pendingTurnStart.value.interactionMode
+                : "default",
               state: "running",
               requestedAt: Option.isSome(pendingTurnStart)
                 ? pendingTurnStart.value.requestedAt
@@ -865,6 +876,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
                   : existingTurn.value.state === "error"
                     ? "error"
                     : "completed",
+              interactionMode: existingTurn.value.interactionMode,
               completedAt: event.payload.streaming
                 ? existingTurn.value.completedAt
                 : (existingTurn.value.completedAt ?? event.payload.updatedAt),
@@ -878,6 +890,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             threadId: event.payload.threadId,
             pendingMessageId: null,
             assistantMessageId: event.payload.messageId,
+            interactionMode: "default",
             state: event.payload.streaming ? "running" : "completed",
             requestedAt: event.payload.createdAt,
             startedAt: event.payload.createdAt,
@@ -902,6 +915,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             yield* projectionTurnRepository.upsertByTurnId({
               ...existingTurn.value,
               state: "interrupted",
+              interactionMode: existingTurn.value.interactionMode,
               completedAt: existingTurn.value.completedAt ?? event.payload.createdAt,
               startedAt: existingTurn.value.startedAt ?? event.payload.createdAt,
               requestedAt: existingTurn.value.requestedAt ?? event.payload.createdAt,
@@ -913,6 +927,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             threadId: event.payload.threadId,
             pendingMessageId: null,
             assistantMessageId: null,
+            interactionMode: "default",
             state: "interrupted",
             requestedAt: event.payload.createdAt,
             startedAt: event.payload.createdAt,
@@ -942,6 +957,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
               ...existingTurn.value,
               assistantMessageId: event.payload.assistantMessageId,
               state: nextState,
+              interactionMode: existingTurn.value.interactionMode,
               checkpointTurnCount: event.payload.checkpointTurnCount,
               checkpointRef: event.payload.checkpointRef,
               checkpointStatus: event.payload.status,
@@ -957,6 +973,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             threadId: event.payload.threadId,
             pendingMessageId: null,
             assistantMessageId: event.payload.assistantMessageId,
+            interactionMode: "default",
             state: nextState,
             requestedAt: event.payload.completedAt,
             startedAt: event.payload.completedAt,

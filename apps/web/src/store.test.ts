@@ -29,6 +29,7 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     latestTurn: null,
     branch: null,
     worktreePath: null,
+    isPinned: false,
     ...overrides,
   };
 }
@@ -50,7 +51,9 @@ function makeState(thread: Thread): AppState {
   };
 }
 
-function makeReadModelThread(overrides: Partial<OrchestrationReadModel["threads"][number]>) {
+function makeReadModelThread(
+  overrides: Partial<OrchestrationReadModel["threads"][number]> = {},
+) {
   return {
     id: ThreadId.makeUnsafe("thread-1"),
     projectId: ProjectId.makeUnsafe("project-1"),
@@ -64,6 +67,7 @@ function makeReadModelThread(overrides: Partial<OrchestrationReadModel["threads"
     createdAt: "2026-02-27T00:00:00.000Z",
     updatedAt: "2026-02-27T00:00:00.000Z",
     deletedAt: null,
+    isPinned: false,
     messages: [],
     activities: [],
     proposedPlans: [],
@@ -101,6 +105,7 @@ describe("store pure functions", () => {
         latestTurn: {
           turnId: TurnId.makeUnsafe("turn-1"),
           state: "completed",
+          interactionMode: "default",
           requestedAt: "2026-02-25T12:28:00.000Z",
           startedAt: "2026-02-25T12:28:30.000Z",
           completedAt: latestTurnCompletedAt,
@@ -146,5 +151,29 @@ describe("store read model sync", () => {
     const next = syncServerReadModel(initialState, readModel);
 
     expect(next.threads[0]?.model).toBe(DEFAULT_MODEL_BY_PROVIDER.codex);
+  });
+
+  it("maps thread pin state from the read model", () => {
+    const initialState = makeState(makeThread({ isPinned: false }));
+    const readModel = makeReadModel(
+      makeReadModelThread({
+        isPinned: true,
+      }),
+    );
+
+    const next = syncServerReadModel(initialState, readModel);
+
+    expect(next.threads[0]?.isPinned).toBe(true);
+  });
+
+  it("defaults missing thread pin state to false during read model sync", () => {
+    const initialState = makeState(makeThread({ isPinned: true }));
+    const thread = makeReadModelThread();
+    const readModel = makeReadModel(thread);
+    Reflect.deleteProperty(readModel.threads[0] as Record<string, unknown>, "isPinned");
+
+    const next = syncServerReadModel(initialState, readModel);
+
+    expect(next.threads[0]?.isPinned).toBe(false);
   });
 });

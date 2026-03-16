@@ -19,7 +19,11 @@ import { useStore } from "../store";
 import { useTerminalStateStore } from "../terminalStateStore";
 import { preferredTerminalEditor } from "../terminal-links";
 import { terminalRunningSubprocessFromEvent } from "../terminalActivity";
-import { onServerConfigUpdated, onServerWelcome } from "../wsNativeApi";
+import {
+  onServerConfigUpdated,
+  onServerProviderStateUpdated,
+  onServerWelcome,
+} from "../wsNativeApi";
 import { providerQueryKeys } from "../lib/providerReactQuery";
 import { collectActiveTerminalThreadIds } from "../lib/terminalStateCleanup";
 
@@ -278,12 +282,16 @@ function EventRouter() {
         },
       });
     });
+    const unsubServerProviderStateUpdated = onServerProviderStateUpdated(() => {
+      void queryClient.invalidateQueries({ queryKey: serverQueryKeys.config() });
+    });
     return () => {
       disposed = true;
       unsubDomainEvent();
       unsubTerminalEvent();
       unsubWelcome();
       unsubServerConfigUpdated();
+      unsubServerProviderStateUpdated();
     };
   }, [
     navigate,

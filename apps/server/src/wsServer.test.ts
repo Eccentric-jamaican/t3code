@@ -27,6 +27,7 @@ import {
   type ServerProviderStatus,
   type KeybindingsConfig,
   type ResolvedKeybindingsConfig,
+  type ServerProviderAccountSummary,
   type WsPush,
 } from "@t3tools/contracts";
 import { compileResolvedKeybindingRule, DEFAULT_KEYBINDINGS } from "./keybindings";
@@ -44,6 +45,7 @@ import { makeSqlitePersistenceLive, SqlitePersistenceMemory } from "./persistenc
 import { SqlClient, SqlError } from "effect/unstable/sql";
 import { ProviderService, type ProviderServiceShape } from "./provider/Services/ProviderService";
 import { ProviderHealth, type ProviderHealthShape } from "./provider/Services/ProviderHealth";
+import { CodexAccountService, type CodexAccountServiceShape } from "./provider/Services/CodexAccountService";
 import { Open, type OpenShape } from "./open";
 import { GitManager, type GitManagerShape } from "./git/Services/GitManager.ts";
 import type { GitCoreShape } from "./git/Services/GitCore.ts";
@@ -79,8 +81,44 @@ const defaultProviderStatuses: ReadonlyArray<ServerProviderStatus> = [
   },
 ];
 
+const defaultProviderAccounts: ReadonlyArray<ServerProviderAccountSummary> = [
+  {
+    provider: "codex",
+    state: "authenticated",
+    authMode: "chatgpt",
+    requiresOpenaiAuth: false,
+    account: {
+      type: "chatgpt",
+      email: "addis@example.com",
+      planType: "pro",
+    },
+    rateLimits: [],
+    login: {
+      status: "idle",
+      loginId: null,
+      authUrl: null,
+      error: null,
+    },
+    message: null,
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  },
+];
+
 const defaultProviderHealthService: ProviderHealthShape = {
   getStatuses: Effect.succeed(defaultProviderStatuses),
+};
+
+const defaultCodexAccountService: CodexAccountServiceShape = {
+  getSnapshot: () => Effect.succeed(defaultProviderAccounts[0]!),
+  startChatGptLogin: () =>
+    Effect.succeed({
+      provider: "codex",
+      loginId: "login-1",
+      authUrl: "https://example.com/auth",
+    }),
+  cancelLogin: () => Effect.succeed({ status: "notFound" }),
+  logout: () => Effect.void,
+  updates: Stream.empty,
 };
 
 class MockTerminalManager implements TerminalManagerShape {
@@ -392,6 +430,7 @@ describe("WebSocket Server", () => {
       staticDir?: string;
       providerLayer?: Layer.Layer<ProviderService, never>;
       providerHealth?: ProviderHealthShape;
+      codexAccountService?: CodexAccountServiceShape;
       open?: OpenShape;
       gitManager?: GitManagerShape;
       gitCore?: Pick<GitCoreShape, "listBranches" | "initRepo" | "pullCurrentBranch">;
@@ -409,6 +448,10 @@ describe("WebSocket Server", () => {
     const providerHealthLayer = Layer.succeed(
       ProviderHealth,
       options.providerHealth ?? defaultProviderHealthService,
+    );
+    const codexAccountServiceLayer = Layer.succeed(
+      CodexAccountService,
+      options.codexAccountService ?? defaultCodexAccountService,
     );
     const openLayer = Layer.succeed(Open, options.open ?? defaultOpenService);
     const serverConfigLayer = Layer.succeed(ServerConfig, {
@@ -446,6 +489,7 @@ describe("WebSocket Server", () => {
     const dependenciesLayer = Layer.empty.pipe(
       Layer.provideMerge(runtimeLayer),
       Layer.provideMerge(providerHealthLayer),
+      Layer.provideMerge(codexAccountServiceLayer),
       Layer.provideMerge(openLayer),
       Layer.provideMerge(serverConfigLayer),
       Layer.provideMerge(AnalyticsService.layerTest),
@@ -756,6 +800,7 @@ describe("WebSocket Server", () => {
       keybindings: DEFAULT_RESOLVED_KEYBINDINGS,
       issues: [],
       providers: defaultProviderStatuses,
+      providerAccounts: defaultProviderAccounts,
       availableEditors: expect.any(Array),
     });
     expectAvailableEditors((response.result as { availableEditors: unknown }).availableEditors);
@@ -782,6 +827,7 @@ describe("WebSocket Server", () => {
       keybindings: DEFAULT_RESOLVED_KEYBINDINGS,
       issues: [],
       providers: defaultProviderStatuses,
+      providerAccounts: defaultProviderAccounts,
       availableEditors: expect.any(Array),
     });
     expectAvailableEditors((response.result as { availableEditors: unknown }).availableEditors);
@@ -818,6 +864,7 @@ describe("WebSocket Server", () => {
         },
       ],
       providers: defaultProviderStatuses,
+      providerAccounts: defaultProviderAccounts,
       availableEditors: expect.any(Array),
     });
     expectAvailableEditors((response.result as { availableEditors: unknown }).availableEditors);
@@ -853,6 +900,7 @@ describe("WebSocket Server", () => {
       keybindings: ResolvedKeybindingsConfig;
       issues: Array<{ kind: string; index?: number; message: string }>;
       providers: ReadonlyArray<ServerProviderStatus>;
+      providerAccounts: ReadonlyArray<ServerProviderAccountSummary>;
       availableEditors: unknown;
     };
     expect(result.cwd).toBe("/my/workspace");
@@ -873,6 +921,7 @@ describe("WebSocket Server", () => {
     expect(result.keybindings.some((entry) => entry.command === "terminal.toggle")).toBe(true);
     expect(result.keybindings.some((entry) => entry.command === "terminal.new")).toBe(true);
     expect(result.providers).toEqual(defaultProviderStatuses);
+    expect(result.providerAccounts).toEqual(defaultProviderAccounts);
     expectAvailableEditors(result.availableEditors);
   });
 
@@ -913,6 +962,120 @@ describe("WebSocket Server", () => {
         (push.data as { issues: unknown[] }).issues.length === 0,
     );
     expect(successPush.data).toEqual({ issues: [], providers: defaultProviderStatuses });
+  });
+
+  it("includes providerAccounts in server.getConfig and pushes provider state updates", async () => {
+    const updates = await Effect.runPromise(PubSub.unbounded<ServerProviderAccountSummary>());
+    let snapshot = defaultProviderAccounts[0]!;
+    const codexAccountService: CodexAccountServiceShape = {
+      getSnapshot: () => Effect.sync(() => snapshot),
+      startChatGptLogin: defaultCodexAccountService.startChatGptLogin,
+      cancelLogin: defaultCodexAccountService.cancelLogin,
+      logout: defaultCodexAccountService.logout,
+      updates: Stream.fromPubSub(updates),
+    };
+
+    server = await createTestServer({
+      cwd: "/my/workspace",
+      codexAccountService,
+    });
+    const addr = server.address();
+    const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+
+    const ws = await connectWs(port);
+    connections.push(ws);
+    await waitForMessage(ws);
+
+    const configResponse = await sendRequest(ws, WS_METHODS.serverGetConfig);
+    expect(configResponse.error).toBeUndefined();
+    expect(configResponse.result).toEqual(
+      expect.objectContaining({
+        providers: defaultProviderStatuses,
+        providerAccounts: defaultProviderAccounts,
+      }),
+    );
+
+    snapshot = {
+      ...snapshot,
+      state: "unauthenticated",
+      authMode: null,
+      account: null,
+      updatedAt: "2026-01-02T00:00:00.000Z",
+    };
+    await Effect.runPromise(PubSub.publish(updates, snapshot));
+
+    const push = await waitForPush(ws, WS_CHANNELS.serverProviderStateUpdated);
+    expect(push.data).toEqual({
+      providers: [
+        {
+          ...defaultProviderStatuses[0]!,
+          authStatus: "unauthenticated",
+        },
+      ],
+      providerAccounts: [snapshot],
+    });
+  });
+
+  it("routes provider account login and logout requests through CodexAccountService", async () => {
+    const calls: string[] = [];
+    const codexAccountService: CodexAccountServiceShape = {
+      getSnapshot: defaultCodexAccountService.getSnapshot,
+      startChatGptLogin: () =>
+        Effect.sync(() => {
+          calls.push("start");
+          return {
+            provider: "codex" as const,
+            loginId: "login-42",
+            authUrl: "https://example.com/login-42",
+          };
+        }),
+      cancelLogin: (loginId) =>
+        Effect.sync(() => {
+          calls.push(`cancel:${loginId}`);
+          return { status: "canceled" as const };
+        }),
+      logout: () =>
+        Effect.sync(() => {
+          calls.push("logout");
+        }),
+      updates: Stream.empty,
+    };
+
+    server = await createTestServer({
+      cwd: "/my/workspace",
+      codexAccountService,
+    });
+    const addr = server.address();
+    const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+
+    const ws = await connectWs(port);
+    connections.push(ws);
+    await waitForMessage(ws);
+
+    const startResponse = await sendRequest(ws, WS_METHODS.serverStartProviderLogin, {
+      provider: "codex",
+      type: "chatgpt",
+    });
+    expect(startResponse.error).toBeUndefined();
+    expect(startResponse.result).toEqual({
+      provider: "codex",
+      loginId: "login-42",
+      authUrl: "https://example.com/login-42",
+    });
+
+    const cancelResponse = await sendRequest(ws, WS_METHODS.serverCancelProviderLogin, {
+      provider: "codex",
+      loginId: "login-42",
+    });
+    expect(cancelResponse.error).toBeUndefined();
+    expect(cancelResponse.result).toEqual({ status: "canceled" });
+
+    const logoutResponse = await sendRequest(ws, WS_METHODS.serverLogoutProvider, {
+      provider: "codex",
+    });
+    expect(logoutResponse.error).toBeUndefined();
+    expect(logoutResponse.result).toEqual({});
+    expect(calls).toEqual(["start", "cancel:login-42", "logout"]);
   });
 
   it("routes shell.openInEditor through the injected open service", async () => {
@@ -973,6 +1136,7 @@ describe("WebSocket Server", () => {
       keybindings: compileKeybindings(persistedConfig),
       issues: [],
       providers: defaultProviderStatuses,
+      providerAccounts: defaultProviderAccounts,
       availableEditors: expect.any(Array),
     });
     expectAvailableEditors((response.result as { availableEditors: unknown }).availableEditors);
@@ -1021,6 +1185,7 @@ describe("WebSocket Server", () => {
       keybindings: compileKeybindings(persistedConfig),
       issues: [],
       providers: defaultProviderStatuses,
+      providerAccounts: defaultProviderAccounts,
       availableEditors: expect.any(Array),
     });
     expectAvailableEditors(

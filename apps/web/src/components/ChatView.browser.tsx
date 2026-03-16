@@ -2,6 +2,7 @@
 import "../index.css";
 
 import {
+  EventId,
   ORCHESTRATION_WS_METHODS,
   type MessageId,
   type OrchestrationProposedPlanId,
@@ -9,6 +10,7 @@ import {
   type ProjectId,
   type ServerConfig,
   type ThreadId,
+  type TurnId,
   type WsWelcomePayload,
   WS_CHANNELS,
   WS_METHODS,
@@ -121,6 +123,7 @@ function createBaseServerConfig(): ServerConfig {
         checkedAt: NOW_ISO,
       },
     ],
+    providerAccounts: [],
     availableEditors: [],
   };
 }
@@ -224,6 +227,7 @@ function createSnapshotForTargetUser(options: {
         runtimeMode: "full-access",
         branch: "main",
         worktreePath: null,
+        isPinned: false,
         latestTurn: null,
         createdAt: NOW_ISO,
         updatedAt: NOW_ISO,
@@ -296,6 +300,7 @@ function createSelectionFeatureSnapshot(): OrchestrationReadModel {
         runtimeMode: "full-access",
         branch: "main",
         worktreePath: null,
+        isPinned: false,
         latestTurn: null,
         createdAt: NOW_ISO,
         updatedAt: NOW_ISO,
@@ -329,6 +334,100 @@ function createSelectionFeatureSnapshot(): OrchestrationReadModel {
           providerName: "codex",
           runtimeMode: "full-access",
           activeTurnId: null,
+          lastError: null,
+          updatedAt: NOW_ISO,
+        },
+      },
+    ],
+    updatedAt: NOW_ISO,
+  };
+}
+
+function createActivePlanRegressionSnapshot(options: {
+  latestTurnInteractionMode: "default" | "plan";
+}): OrchestrationReadModel {
+  const historicalTurnId = "turn-plan-history" as TurnId;
+  const latestTurnId = "turn-plan-latest" as TurnId;
+
+  return {
+    snapshotSequence: 1,
+    projects: [
+      {
+        id: PROJECT_ID,
+        title: "Project",
+        workspaceRoot: "/repo/project",
+        defaultModel: "gpt-5",
+        scripts: [],
+        createdAt: NOW_ISO,
+        updatedAt: NOW_ISO,
+        deletedAt: null,
+      },
+    ],
+    threads: [
+      {
+        id: THREAD_ID,
+        projectId: PROJECT_ID,
+        title: "Plan regression thread",
+        model: "gpt-5",
+        interactionMode: options.latestTurnInteractionMode,
+        runtimeMode: "full-access",
+        branch: "main",
+        worktreePath: null,
+        isPinned: false,
+        latestTurn: {
+          turnId: latestTurnId,
+          state: "running",
+          interactionMode: options.latestTurnInteractionMode,
+          requestedAt: isoAt(9),
+          startedAt: isoAt(10),
+          completedAt: null,
+          assistantMessageId: null,
+        },
+        createdAt: NOW_ISO,
+        updatedAt: NOW_ISO,
+        deletedAt: null,
+        messages: [
+          createUserMessage({
+            id: "msg-user-plan-regression" as MessageId,
+            text: "Implement the plan",
+            offsetSeconds: 0,
+          }),
+          createAssistantMessage({
+            id: "msg-assistant-plan-regression" as MessageId,
+            text: "Starting implementation",
+            offsetSeconds: 3,
+          }),
+        ],
+        activities: [
+          {
+            id: EventId.makeUnsafe("activity-plan-latest"),
+            tone: "info",
+            kind: "turn.plan.updated",
+            summary: "Plan updated",
+            payload: {
+              explanation: "Active plan explanation",
+              plan: [{ step: "Active implementation step", status: "inProgress" }],
+            },
+            turnId: latestTurnId,
+            createdAt: isoAt(12),
+          },
+        ],
+        proposedPlans: [
+          {
+            id: "plan-history-1" as OrchestrationProposedPlanId,
+            turnId: historicalTurnId,
+            planMarkdown: "# Historical plan card\n\nKeep this visible.",
+            createdAt: isoAt(6),
+            updatedAt: isoAt(6),
+          },
+        ],
+        checkpoints: [],
+        session: {
+          threadId: THREAD_ID,
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "full-access",
+          activeTurnId: latestTurnId,
           lastError: null,
           updatedAt: NOW_ISO,
         },
@@ -1183,6 +1282,58 @@ describe("ChatView timeline estimator parity (full app)", () => {
             cwd: "/repo/project",
             editor: "vscode",
           });
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("does not render the active plan panel for a default-mode latest turn", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createActivePlanRegressionSnapshot({
+        latestTurnInteractionMode: "default",
+      }),
+    });
+
+    try {
+      await waitForElement(
+        () =>
+          Array.from(document.querySelectorAll("h1")).find((heading) =>
+            heading.textContent?.includes("Historical plan card"),
+          ) as HTMLElement | null,
+        "Unable to find historical proposed plan card.",
+      );
+
+      await vi.waitFor(
+        () => {
+          expect(document.body.textContent).toContain("Historical plan card");
+          expect(document.body.textContent).not.toContain("Active plan explanation");
+          expect(document.body.textContent).not.toContain("Active implementation step");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("renders the active plan panel for a plan-mode latest turn", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createActivePlanRegressionSnapshot({
+        latestTurnInteractionMode: "plan",
+      }),
+    });
+
+    try {
+      await vi.waitFor(
+        () => {
+          expect(document.body.textContent).toContain("Active plan explanation");
+          expect(document.body.textContent).toContain("Active implementation step");
+          expect(document.body.textContent).toContain("Historical plan card");
         },
         { timeout: 8_000, interval: 16 },
       );

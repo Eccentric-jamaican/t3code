@@ -222,7 +222,7 @@ describe("derivePendingUserInputs", () => {
 });
 
 describe("deriveActivePlanState", () => {
-  it("returns the latest plan update for the active turn", () => {
+  it("returns the latest plan update for the active turn when the latest turn is in plan mode", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
         id: "plan-old",
@@ -250,12 +250,81 @@ describe("deriveActivePlanState", () => {
       }),
     ];
 
-    expect(deriveActivePlanState(activities, TurnId.makeUnsafe("turn-1"))).toEqual({
+    expect(deriveActivePlanState(activities, TurnId.makeUnsafe("turn-1"), "plan")).toEqual({
       createdAt: "2026-02-23T00:00:02.000Z",
       turnId: "turn-1",
       explanation: "Refined plan",
       steps: [{ step: "Implement Codex user input", status: "inProgress" }],
     });
+  });
+
+  it("returns null for default-mode latest turns even if they emitted plan updates", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "plan-default-turn",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "turn.plan.updated",
+        summary: "Plan updated",
+        tone: "info",
+        turnId: "turn-1",
+        payload: {
+          explanation: "Refined plan",
+          plan: [{ step: "Implement Codex user input", status: "inProgress" }],
+        },
+      }),
+    ];
+
+    expect(deriveActivePlanState(activities, TurnId.makeUnsafe("turn-1"), "default")).toBeNull();
+  });
+
+  it("ignores older plan-mode turns when the latest turn is default", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "plan-older-turn",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "turn.plan.updated",
+        summary: "Plan updated",
+        tone: "info",
+        turnId: "turn-1",
+        payload: {
+          explanation: "Older plan",
+          plan: [{ step: "Inspect code", status: "pending" }],
+        },
+      }),
+      makeActivity({
+        id: "plan-latest-default-turn",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "turn.plan.updated",
+        summary: "Plan updated",
+        tone: "info",
+        turnId: "turn-2",
+        payload: {
+          explanation: "Implementation details",
+          plan: [{ step: "Ship change", status: "inProgress" }],
+        },
+      }),
+    ];
+
+    expect(deriveActivePlanState(activities, TurnId.makeUnsafe("turn-2"), "default")).toBeNull();
+  });
+
+  it("returns null when there is no latest turn id", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "plan-without-latest-turn",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "turn.plan.updated",
+        summary: "Plan updated",
+        tone: "info",
+        turnId: "turn-1",
+        payload: {
+          explanation: "Refined plan",
+          plan: [{ step: "Implement Codex user input", status: "inProgress" }],
+        },
+      }),
+    ];
+
+    expect(deriveActivePlanState(activities, undefined, "plan")).toBeNull();
   });
 });
 
@@ -399,7 +468,7 @@ describe("deriveWorkLogEntries", () => {
       makeActivity({
         id: "tool-complete",
         createdAt: "2026-02-23T00:00:02.000Z",
-        summary: "Command run complete",
+        summary: "Ran command",
         tone: "tool",
         kind: "tool.completed",
       }),
@@ -407,6 +476,89 @@ describe("deriveWorkLogEntries", () => {
 
     const entries = deriveWorkLogEntries(activities, undefined);
     expect(entries.map((entry) => entry.id)).toEqual(["tool-complete"]);
+  });
+
+  it("keeps compact Codex tool metadata used for icons and labels", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "tool-with-metadata",
+        kind: "tool.completed",
+        summary: "bash",
+        payload: {
+          itemType: "command_execution",
+          title: "bash",
+          status: "completed",
+          detail: '{ "dev": "vite dev --port 3000" } <exited with exit code 0>',
+          data: {
+            item: {
+              command: ["bun", "run", "dev"],
+              result: {
+                content: '{ "dev": "vite dev --port 3000" } <exited with exit code 0>',
+                exitCode: 0,
+              },
+            },
+          },
+        },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities, undefined);
+    expect(entry).toMatchObject({
+      command: "bun run dev",
+      detail: '{ "dev": "vite dev --port 3000" }',
+      itemType: "command_execution",
+      toolTitle: "bash",
+    });
+  });
+
+  it("extracts changed file paths from nested tool and approval payloads", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "file-tool",
+        kind: "tool.completed",
+        summary: "File change",
+        payload: {
+          itemType: "file_change",
+          data: {
+            item: {
+              result: {
+                changes: [{ path: "apps/web/src/components/ChatView.tsx" }],
+              },
+            },
+          },
+        },
+      }),
+      makeActivity({
+        id: "approval-request",
+        kind: "approval.requested",
+        summary: "File-change approval requested",
+        tone: "approval",
+        payload: {
+          requestId: "req-1",
+          requestKind: "file-change",
+          args: {
+            changes: [{ filePath: "apps/web/src/session-logic.ts" }],
+          },
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+    expect(entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "file-tool",
+          changedFiles: ["apps/web/src/components/ChatView.tsx"],
+          itemType: "file_change",
+        }),
+        expect.objectContaining({
+          id: "approval-request",
+          changedFiles: ["apps/web/src/session-logic.ts"],
+          requestKind: "file-change",
+          tone: "info",
+        }),
+      ]),
+    );
   });
 
   it("orders work log by activity sequence when present", () => {

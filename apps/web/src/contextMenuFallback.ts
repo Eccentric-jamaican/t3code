@@ -10,12 +10,15 @@ export function showContextMenuFallback<T extends string>(
   position?: { x: number; y: number },
 ): Promise<T | null> {
   return new Promise<T | null>((resolve) => {
+    let resolved = false;
     const overlay = document.createElement("div");
     overlay.style.cssText = "position:fixed;inset:0;z-index:9999";
+    overlay.setAttribute("data-testid", "context-menu-overlay");
 
     const menu = document.createElement("div");
     menu.className =
       "fixed z-[10000] min-w-[140px] rounded-md border border-border bg-popover py-1 shadow-xl animate-in fade-in zoom-in-95";
+    menu.setAttribute("data-testid", "context-menu-fallback");
 
     const x = position?.x ?? 0;
     const y = position?.y ?? 0;
@@ -23,6 +26,10 @@ export function showContextMenuFallback<T extends string>(
     menu.style.left = `${x}px`;
 
     function cleanup(result: T | null) {
+      if (resolved) {
+        return;
+      }
+      resolved = true;
       document.removeEventListener("keydown", onKeyDown);
       overlay.remove();
       menu.remove();
@@ -36,18 +43,34 @@ export function showContextMenuFallback<T extends string>(
       }
     }
 
-    overlay.addEventListener("mousedown", () => cleanup(null));
+    const stopMenuEvent = (event: Event) => {
+      event.stopPropagation();
+    };
+
+    overlay.addEventListener("pointerdown", () => cleanup(null));
+    menu.addEventListener("pointerdown", stopMenuEvent);
+    menu.addEventListener("mousedown", stopMenuEvent);
+    menu.addEventListener("click", stopMenuEvent);
     document.addEventListener("keydown", onKeyDown);
 
     for (const item of items) {
       const btn = document.createElement("button");
       btn.type = "button";
+      btn.setAttribute("data-context-menu-item-id", item.id);
       btn.textContent = item.label;
       const isDestructiveAction = item.destructive === true || item.id === "delete";
       btn.className = isDestructiveAction
         ? "flex w-full items-center gap-2 px-3 py-1.5 text-left text-[11px] text-destructive hover:bg-accent cursor-default"
         : "flex w-full items-center gap-2 px-3 py-1.5 text-left text-[11px] text-popover-foreground hover:bg-accent cursor-default";
-      btn.addEventListener("click", () => cleanup(item.id));
+      btn.addEventListener("pointerdown", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        cleanup(item.id);
+      });
+      btn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      });
       menu.appendChild(btn);
     }
 

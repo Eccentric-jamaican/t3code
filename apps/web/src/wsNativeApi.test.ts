@@ -8,6 +8,7 @@ import {
   WS_CHANNELS,
   WS_METHODS,
   type ServerProviderStatus,
+  type ServerProviderStateUpdatedPayload,
 } from "@t3tools/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -73,6 +74,32 @@ const defaultProviders: ReadonlyArray<ServerProviderStatus> = [
     checkedAt: "2026-01-01T00:00:00.000Z",
   },
 ];
+
+const defaultProviderStateUpdatedPayload: ServerProviderStateUpdatedPayload = {
+  providers: defaultProviders,
+  providerAccounts: [
+    {
+      provider: "codex",
+      state: "authenticated",
+      authMode: "chatgpt",
+      requiresOpenaiAuth: false,
+      account: {
+        type: "chatgpt",
+        email: "addis@example.com",
+        planType: "pro",
+      },
+      rateLimits: [],
+      login: {
+        status: "idle",
+        loginId: null,
+        authUrl: null,
+        error: null,
+      },
+      message: null,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    },
+  ],
+};
 
 beforeEach(() => {
   vi.resetModules();
@@ -213,6 +240,50 @@ describe("wsNativeApi", () => {
     expect(warnSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("delivers and caches valid server.providerStateUpdated payloads", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { createWsNativeApi, onServerProviderStateUpdated } = await import("./wsNativeApi");
+
+    createWsNativeApi();
+    const listener = vi.fn();
+    onServerProviderStateUpdated(listener);
+
+    emitPush(WS_CHANNELS.serverProviderStateUpdated, defaultProviderStateUpdatedPayload);
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith(defaultProviderStateUpdatedPayload);
+
+    const lateListener = vi.fn();
+    onServerProviderStateUpdated(lateListener);
+
+    expect(lateListener).toHaveBeenCalledTimes(1);
+    expect(lateListener).toHaveBeenCalledWith(defaultProviderStateUpdatedPayload);
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it("drops malformed server.providerStateUpdated payloads", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { createWsNativeApi, onServerProviderStateUpdated } = await import("./wsNativeApi");
+
+    createWsNativeApi();
+    const listener = vi.fn();
+    onServerProviderStateUpdated(listener);
+
+    emitPush(WS_CHANNELS.serverProviderStateUpdated, {
+      providers: defaultProviders,
+      providerAccounts: [
+        {
+          provider: "codex",
+          state: "authenticated",
+          authMode: "chatgpt",
+        },
+      ],
+    });
+
+    expect(listener).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("forwards valid terminal and orchestration events", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const { createWsNativeApi } = await import("./wsNativeApi");
@@ -323,6 +394,24 @@ describe("wsNativeApi", () => {
       workspaceRoot: "/tmp/project",
       defaultModel: "gpt-5-codex",
       createdAt: "2026-02-24T00:00:00.000Z",
+    } as const;
+    await api.orchestration.dispatchCommand(command);
+
+    expect(requestMock).toHaveBeenCalledWith(ORCHESTRATION_WS_METHODS.dispatchCommand, {
+      command,
+    });
+  });
+
+  it("wraps thread pin updates in the orchestration dispatch envelope", async () => {
+    requestMock.mockResolvedValue(undefined);
+    const { createWsNativeApi } = await import("./wsNativeApi");
+
+    const api = createWsNativeApi();
+    const command = {
+      type: "thread.meta.update",
+      commandId: CommandId.makeUnsafe("cmd-pin-1"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      isPinned: true,
     } as const;
     await api.orchestration.dispatchCommand(command);
 

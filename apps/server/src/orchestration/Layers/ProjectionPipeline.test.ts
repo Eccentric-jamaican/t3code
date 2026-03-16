@@ -1758,6 +1758,7 @@ it.effect("restores pending turn-start metadata across projection pipeline resta
           threadId,
           messageId,
           runtimeMode: "approval-required",
+          interactionMode: "plan",
           createdAt: turnStartedAt,
         },
       });
@@ -1808,11 +1809,13 @@ it.effect("restores pending turn-start metadata across projection pipeline resta
       return yield* sql<{
         readonly turnId: string;
         readonly userMessageId: string | null;
+        readonly interactionMode: string;
         readonly startedAt: string;
       }>`
         SELECT
           turn_id AS "turnId",
           pending_message_id AS "userMessageId",
+          interaction_mode AS "interactionMode",
           started_at AS "startedAt"
         FROM projection_turns
         WHERE turn_id = ${turnId}
@@ -1823,6 +1826,7 @@ it.effect("restores pending turn-start metadata across projection pipeline resta
       {
         turnId: "turn-restart",
         userMessageId: "message-restart",
+        interactionMode: "plan",
         startedAt: turnStartedAt,
       },
     ]);
@@ -1833,6 +1837,103 @@ it.effect("restores pending turn-start metadata across projection pipeline resta
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd()), NodeServices.layer),
     ),
   ),
+);
+
+it.effect("defaults orphan turn rows to default interaction mode when no pending start exists", () =>
+  Effect.gen(function* () {
+    const projectionPipeline = yield* OrchestrationProjectionPipeline;
+    const eventStore = yield* OrchestrationEventStore;
+    const sql = yield* SqlClient.SqlClient;
+    const threadId = ThreadId.makeUnsafe("thread-default-interaction");
+    const turnId = TurnId.makeUnsafe("turn-default-interaction");
+    const messageId = MessageId.makeUnsafe("assistant-default-interaction");
+    const createdAt = "2026-02-26T15:00:00.000Z";
+
+    const appendAndProject = (event: Parameters<typeof eventStore.append>[0]) =>
+      eventStore
+        .append(event)
+        .pipe(Effect.flatMap((savedEvent) => projectionPipeline.projectEvent(savedEvent)));
+
+    yield* appendAndProject({
+      type: "project.created",
+      eventId: EventId.makeUnsafe("evt-default-interaction-1"),
+      aggregateKind: "project",
+      aggregateId: ProjectId.makeUnsafe("project-default-interaction"),
+      occurredAt: createdAt,
+      commandId: CommandId.makeUnsafe("cmd-default-interaction-1"),
+      causationEventId: null,
+      correlationId: CorrelationId.makeUnsafe("cmd-default-interaction-1"),
+      metadata: {},
+      payload: {
+        projectId: ProjectId.makeUnsafe("project-default-interaction"),
+        title: "Project Default Interaction",
+        workspaceRoot: "/tmp/project-default-interaction",
+        defaultModel: null,
+        scripts: [],
+        createdAt,
+        updatedAt: createdAt,
+      },
+    });
+
+    yield* appendAndProject({
+      type: "thread.created",
+      eventId: EventId.makeUnsafe("evt-default-interaction-2"),
+      aggregateKind: "thread",
+      aggregateId: threadId,
+      occurredAt: createdAt,
+      commandId: CommandId.makeUnsafe("cmd-default-interaction-2"),
+      causationEventId: null,
+      correlationId: CorrelationId.makeUnsafe("cmd-default-interaction-2"),
+      metadata: {},
+      payload: {
+        threadId,
+        projectId: ProjectId.makeUnsafe("project-default-interaction"),
+        title: "Thread Default Interaction",
+        model: "gpt-5-codex",
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+        updatedAt: createdAt,
+      },
+    });
+
+    yield* appendAndProject({
+      type: "thread.message-sent",
+      eventId: EventId.makeUnsafe("evt-default-interaction-3"),
+      aggregateKind: "thread",
+      aggregateId: threadId,
+      occurredAt: createdAt,
+      commandId: CommandId.makeUnsafe("cmd-default-interaction-3"),
+      causationEventId: null,
+      correlationId: CorrelationId.makeUnsafe("cmd-default-interaction-3"),
+      metadata: {},
+      payload: {
+        threadId,
+        messageId,
+        role: "assistant",
+        text: "done",
+        turnId,
+        streaming: false,
+        createdAt,
+        updatedAt: createdAt,
+      },
+    });
+
+    const rows = yield* sql<{
+      readonly turnId: string;
+      readonly interactionMode: string;
+    }>`
+      SELECT
+        turn_id AS "turnId",
+        interaction_mode AS "interactionMode"
+      FROM projection_turns
+      WHERE thread_id = ${threadId}
+    `;
+
+    assert.deepEqual(rows, [{ turnId: "turn-default-interaction", interactionMode: "default" }]);
+  }).pipe(Effect.provide(makeProjectionPipelineTestLayer(process.cwd()))),
 );
 
 const engineLayer = it.layer(

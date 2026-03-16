@@ -20,7 +20,15 @@ import type {
   ProjectWriteFileInput,
   ProjectWriteFileResult,
 } from "./project";
-import type { ServerConfig } from "./server";
+import type {
+  ServerCancelProviderLoginInput,
+  ServerCancelProviderLoginResult,
+  ServerConfig,
+  ServerLogoutProviderInput,
+  ServerLogoutProviderResult,
+  ServerStartProviderLoginInput,
+  ServerStartProviderLoginResult,
+} from "./server";
 import type {
   TerminalClearInput,
   TerminalCloseInput,
@@ -137,6 +145,13 @@ export interface NativeApi {
   server: {
     getConfig: () => Promise<ServerConfig>;
     upsertKeybinding: (input: ServerUpsertKeybindingInput) => Promise<ServerUpsertKeybindingResult>;
+    startProviderLogin: (
+      input: ServerStartProviderLoginInput,
+    ) => Promise<ServerStartProviderLoginResult>;
+    cancelProviderLogin: (
+      input: ServerCancelProviderLoginInput,
+    ) => Promise<ServerCancelProviderLoginResult>;
+    logoutProvider: (input: ServerLogoutProviderInput) => Promise<ServerLogoutProviderResult>;
   };
   orchestration: {
     getSnapshot: () => Promise<OrchestrationReadModel>;

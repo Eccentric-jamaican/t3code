@@ -257,6 +257,7 @@ export function projectEvent(
             interactionMode: payload.interactionMode,
             branch: payload.branch,
             worktreePath: payload.worktreePath,
+            isPinned: payload.isPinned,
             latestTurn: null,
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
@@ -296,6 +297,7 @@ export function projectEvent(
           threads: updateThread(nextBase.threads, payload.threadId, {
             ...(payload.title !== undefined ? { title: payload.title } : {}),
             ...(payload.model !== undefined ? { model: payload.model } : {}),
+            ...(payload.isPinned !== undefined ? { isPinned: payload.isPinned } : {}),
             ...(payload.branch !== undefined ? { branch: payload.branch } : {}),
             ...(payload.worktreePath !== undefined ? { worktreePath: payload.worktreePath } : {}),
             updatedAt: payload.updatedAt,
@@ -425,6 +427,10 @@ export function projectEvent(
                 ? {
                     turnId: session.activeTurnId,
                     state: "running",
+                    interactionMode:
+                      thread.latestTurn?.turnId === session.activeTurnId
+                        ? thread.latestTurn.interactionMode
+                        : thread.interactionMode,
                     requestedAt:
                       thread.latestTurn?.turnId === session.activeTurnId
                         ? thread.latestTurn.requestedAt
@@ -519,6 +525,10 @@ export function projectEvent(
             latestTurn: {
               turnId: payload.turnId,
               state: checkpointStatusToLatestTurnState(payload.status),
+              interactionMode:
+                thread.latestTurn?.turnId === payload.turnId
+                  ? thread.latestTurn.interactionMode
+                  : thread.interactionMode,
               requestedAt:
                 thread.latestTurn?.turnId === payload.turnId
                   ? thread.latestTurn.requestedAt
@@ -566,6 +576,10 @@ export function projectEvent(
               : {
                   turnId: latestCheckpoint.turnId,
                   state: checkpointStatusToLatestTurnState(latestCheckpoint.status),
+                  interactionMode:
+                    thread.latestTurn?.turnId === latestCheckpoint.turnId
+                      ? thread.latestTurn.interactionMode
+                      : thread.interactionMode,
                   requestedAt: latestCheckpoint.completedAt,
                   startedAt: latestCheckpoint.completedAt,
                   completedAt: latestCheckpoint.completedAt,

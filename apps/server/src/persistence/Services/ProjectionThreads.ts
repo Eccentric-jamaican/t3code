@@ -14,7 +14,7 @@ import {
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
-import { Option, Schema, ServiceMap } from "effect";
+import { Option, Schema, ServiceMap, Struct } from "effect";
 import type { Effect } from "effect";
 
 import type { ProjectionRepositoryError } from "../Errors.ts";
@@ -28,12 +28,27 @@ export const ProjectionThread = Schema.Struct({
   interactionMode: ProviderInteractionMode,
   branch: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
+  isPinned: Schema.Boolean,
   latestTurnId: Schema.NullOr(TurnId),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   deletedAt: Schema.NullOr(IsoDateTime),
 });
 export type ProjectionThread = typeof ProjectionThread.Type;
+
+export const ProjectionThreadDbRow = ProjectionThread.mapFields(
+  Struct.assign({
+    isPinned: Schema.Number,
+  }),
+);
+export type ProjectionThreadDbRow = typeof ProjectionThreadDbRow.Type;
+
+export function normalizeProjectionThreadDbRow(row: ProjectionThreadDbRow): ProjectionThread {
+  return {
+    ...row,
+    isPinned: row.isPinned !== 0,
+  };
+}
 
 export const GetProjectionThreadInput = Schema.Struct({
   threadId: ThreadId,
