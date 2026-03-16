@@ -96,6 +96,9 @@ function createThreadControlHarness() {
 
 function createPendingUserInputHarness() {
   const manager = new CodexAppServerManager();
+  const transport = {
+    respond: vi.fn(),
+  };
   const context = {
     session: {
       provider: "codex",
@@ -117,6 +120,7 @@ function createPendingUserInputHarness() {
         },
       ],
     ]),
+    transport,
   };
 
   const requireSession = vi
@@ -125,14 +129,11 @@ function createPendingUserInputHarness() {
       "requireSession",
     )
     .mockReturnValue(context);
-  const writeMessage = vi
-    .spyOn(manager as unknown as { writeMessage: (...args: unknown[]) => void }, "writeMessage")
-    .mockImplementation(() => {});
   const emitEvent = vi
     .spyOn(manager as unknown as { emitEvent: (...args: unknown[]) => void }, "emitEvent")
     .mockImplementation(() => {});
 
-  return { manager, context, requireSession, writeMessage, emitEvent };
+  return { manager, context, requireSession, transport, emitEvent };
 }
 
 describe("classifyCodexStderrLine", () => {
@@ -584,8 +585,7 @@ describe("thread checkpoint control", () => {
 
 describe("respondToUserInput", () => {
   it("serializes canonical answers to Codex native answer objects", async () => {
-    const { manager, context, requireSession, writeMessage, emitEvent } =
-      createPendingUserInputHarness();
+    const { manager, requireSession, transport, emitEvent } = createPendingUserInputHarness();
 
     await manager.respondToUserInput(
       asThreadId("thread_1"),
@@ -597,8 +597,7 @@ describe("respondToUserInput", () => {
     );
 
     expect(requireSession).toHaveBeenCalledWith("thread_1");
-    expect(writeMessage).toHaveBeenCalledWith(context, {
-      id: 42,
+    expect(transport.respond).toHaveBeenCalledWith(42, {
       result: {
         answers: {
           scope: { answers: ["All request methods"] },
@@ -621,8 +620,7 @@ describe("respondToUserInput", () => {
   });
 
   it("preserves explicit empty multi-select answers", async () => {
-    const { manager, context, requireSession, writeMessage, emitEvent } =
-      createPendingUserInputHarness();
+    const { manager, requireSession, transport, emitEvent } = createPendingUserInputHarness();
 
     await manager.respondToUserInput(
       asThreadId("thread_1"),
@@ -633,8 +631,7 @@ describe("respondToUserInput", () => {
     );
 
     expect(requireSession).toHaveBeenCalledWith("thread_1");
-    expect(writeMessage).toHaveBeenCalledWith(context, {
-      id: 42,
+    expect(transport.respond).toHaveBeenCalledWith(42, {
       result: {
         answers: {
           scope: { answers: [] },
