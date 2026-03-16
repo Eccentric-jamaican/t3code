@@ -27,4 +27,21 @@ layer("NodeSqliteClient", (it) => {
       assert.equal(values[1]?.[1], "beta");
     }),
   );
+
+  it.effect("normalizes boolean parameters for sqlite bindings", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* sql`CREATE TABLE flags(id INTEGER PRIMARY KEY, is_enabled INTEGER NOT NULL)`;
+      yield* sql`INSERT INTO flags(is_enabled) VALUES (${true}), (${false})`;
+
+      const rows = yield* sql<{ readonly is_enabled: number }>`
+        SELECT is_enabled FROM flags ORDER BY id
+      `;
+      assert.deepStrictEqual(
+        rows.map((row) => row.is_enabled),
+        [1, 0],
+      );
+    }),
+  );
 });

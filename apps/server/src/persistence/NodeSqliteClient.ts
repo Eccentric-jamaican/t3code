@@ -50,6 +50,16 @@ export interface SqliteMemoryClientConfig extends Omit<
   "filename" | "readonly"
 > {}
 
+const normalizeSqliteParam = (value: unknown): unknown => {
+  if (typeof value === "boolean") {
+    return value ? 1 : 0;
+  }
+  return value;
+};
+
+const normalizeSqliteParams = (params: ReadonlyArray<unknown>): ReadonlyArray<unknown> =>
+  params.map(normalizeSqliteParam);
+
 const makeWithDatabase = (
   options: SqliteClientConfig,
   openDatabase: () => DatabaseSync,
@@ -96,11 +106,12 @@ const makeWithDatabase = (
       ) =>
         Effect.withFiber<ReadonlyArray<any>, SqlError>((fiber) => {
           statement.setReadBigInts(Boolean(ServiceMap.get(fiber.services, Client.SafeIntegers)));
+          const normalizedParams = normalizeSqliteParams(params);
           try {
             if (hasRows(statement)) {
-              return Effect.succeed(statement.all(...(params as any)));
+              return Effect.succeed(statement.all(...(normalizedParams as any)));
             }
-            const result = statement.run(...(params as any));
+            const result = statement.run(...(normalizedParams as any));
             return Effect.succeed(raw ? (result as unknown as ReadonlyArray<any>) : []);
           } catch (cause) {
             return Effect.fail(new SqlError({ cause, message: "Failed to execute statement" }));
@@ -116,14 +127,15 @@ const makeWithDatabase = (
           (statement) =>
             Effect.try({
               try: () => {
+                const normalizedParams = normalizeSqliteParams(params);
                 if (hasRows(statement)) {
                   statement.setReturnArrays(true);
                   // Safe to cast to array after we've setReturnArrays(true)
-                  return statement.all(...(params as any)) as unknown as ReadonlyArray<
+                  return statement.all(...(normalizedParams as any)) as unknown as ReadonlyArray<
                     ReadonlyArray<unknown>
                   >;
                 }
-                statement.run(...(params as any));
+                statement.run(...(normalizedParams as any));
                 return [];
               },
               catch: (cause) => new SqlError({ cause, message: "Failed to execute statement" }),
