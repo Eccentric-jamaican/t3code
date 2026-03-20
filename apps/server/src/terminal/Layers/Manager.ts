@@ -55,9 +55,9 @@ function normalizeShellCommand(value: string | undefined): string | null {
   if (!value) return null;
   const trimmed = value.trim();
   if (trimmed.length === 0) return null;
-
-  if (process.platform === "win32") {
-    return trimmed;
+  const quotedMatch = /^"([^"]+)"|^'([^']+)'/.exec(trimmed);
+  if (quotedMatch) {
+    return (quotedMatch[1] ?? quotedMatch[2] ?? "").trim() || null;
   }
 
   const firstToken = trimmed.split(/\s+/g)[0]?.trim();
@@ -915,11 +915,26 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       const raw = await fs.promises.readFile(legacyPath, "utf8");
       const capped = capHistory(raw, this.historyLineLimit);
 
-      // Migrate legacy transcript filename to the terminal-scoped path.
+      // Prefer an atomic rename when the legacy contents can be preserved as-is.
+      if (capped === raw) {
+        try {
+          await fs.promises.rename(legacyPath, nextPath);
+          return capped;
+        } catch (migrationError) {
+          this.logger.warn("failed to rename legacy terminal history", {
+            threadId,
+            error: migrationError instanceof Error ? migrationError.message : String(migrationError),
+          });
+        }
+      }
+
       await fs.promises.writeFile(nextPath, capped, "utf8");
       try {
-        await fs.promises.rm(legacyPath, { force: true });
+        await fs.promises.unlink(legacyPath);
       } catch (cleanupError) {
+        if ((cleanupError as NodeJS.ErrnoException).code === "ENOENT") {
+          return capped;
+        }
         this.logger.warn("failed to remove legacy terminal history", {
           threadId,
           error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),

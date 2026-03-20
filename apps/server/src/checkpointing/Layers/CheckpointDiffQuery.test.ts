@@ -38,10 +38,15 @@ function makeSnapshot(input: {
         deletedAt: null,
       },
     ],
+    tasks: [],
+    taskRuntimes: [],
+    projectRules: [],
     threads: [
       {
         id: input.threadId,
         projectId: input.projectId,
+        origin: "user",
+        taskId: null,
         title: "Thread",
         model: "gpt-5-codex",
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -176,6 +181,9 @@ describe("CheckpointDiffQueryLive", () => {
             Effect.succeed({
               snapshotSequence: 0,
               projects: [],
+              tasks: [],
+              taskRuntimes: [],
+              projectRules: [],
               threads: [],
               updatedAt: "2026-01-01T00:00:00.000Z",
             } satisfies OrchestrationReadModel),

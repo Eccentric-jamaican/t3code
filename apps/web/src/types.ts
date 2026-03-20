@@ -1,11 +1,15 @@
 import type {
   OrchestrationLatestTurn,
+  OrchestrationProjectRules as ContractOrchestrationProjectRules,
   OrchestrationProposedPlanId,
   OrchestrationSessionStatus,
+  OrchestrationTask as ContractOrchestrationTask,
+  OrchestrationTaskRuntime as ContractOrchestrationTaskRuntime,
   OrchestrationThreadActivity,
   ProjectScript as ContractProjectScript,
   ThreadId,
   ProjectId,
+  TaskId,
   TurnId,
   MessageId,
   CheckpointRef,
@@ -22,6 +26,8 @@ export const DEFAULT_THREAD_TERMINAL_HEIGHT = 280;
 export const DEFAULT_THREAD_TERMINAL_ID = "default";
 export const MAX_THREAD_TERMINAL_COUNT = 4;
 export type ProjectScript = ContractProjectScript;
+export type TaskState = ContractOrchestrationTask["state"];
+export type TaskRuntimeStatus = ContractOrchestrationTaskRuntime["status"];
 
 export interface ThreadTerminalGroup {
   id: string;
@@ -87,6 +93,8 @@ export interface Thread {
   id: ThreadId;
   codexThreadId: string | null;
   projectId: ProjectId;
+  origin: "user" | "task";
+  taskId: TaskId | null;
   title: string;
   model: string;
   runtimeMode: RuntimeMode;
@@ -104,6 +112,31 @@ export interface Thread {
   turnDiffSummaries: TurnDiffSummary[];
   activities: OrchestrationThreadActivity[];
 }
+
+export interface Task {
+  id: TaskId;
+  projectId: ProjectId;
+  title: string;
+  brief: string;
+  acceptanceCriteria: string;
+  attachments: ChatAttachment[];
+  state: TaskState;
+  priority: number | null;
+  threadId: ThreadId | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TaskRuntime {
+  taskId: TaskId;
+  status: TaskRuntimeStatus;
+  activeTurnId: TurnId | null;
+  lastError: string | null;
+  lastActivityAt: string | null;
+  updatedAt: string;
+}
+
+export interface ProjectRules extends ContractOrchestrationProjectRules {}
 
 export interface ThreadSession {
   provider: ProviderKind;

@@ -2,6 +2,14 @@ import {
   ProjectCreatedPayload as ContractsProjectCreatedPayloadSchema,
   ProjectMetaUpdatedPayload as ContractsProjectMetaUpdatedPayloadSchema,
   ProjectDeletedPayload as ContractsProjectDeletedPayloadSchema,
+  ProjectOrchestrationRulesUpdatedPayload as ContractsProjectOrchestrationRulesUpdatedPayloadSchema,
+  TaskCreatedPayload as ContractsTaskCreatedPayloadSchema,
+  TaskMetaUpdatedPayload as ContractsTaskMetaUpdatedPayloadSchema,
+  TaskStateSetPayload as ContractsTaskStateSetPayloadSchema,
+  TaskDeletedPayload as ContractsTaskDeletedPayloadSchema,
+  TaskRunStartRequestedPayload as ContractsTaskRunStartRequestedPayloadSchema,
+  TaskRunStopRequestedPayload as ContractsTaskRunStopRequestedPayloadSchema,
+  TaskRunRetryRequestedPayload as ContractsTaskRunRetryRequestedPayloadSchema,
   ThreadCreatedPayload as ContractsThreadCreatedPayloadSchema,
   ThreadMetaUpdatedPayload as ContractsThreadMetaUpdatedPayloadSchema,
   ThreadRuntimeModeSetPayload as ContractsThreadRuntimeModeSetPayloadSchema,
@@ -24,6 +32,16 @@ import {
 export const ProjectCreatedPayload = ContractsProjectCreatedPayloadSchema;
 export const ProjectMetaUpdatedPayload = ContractsProjectMetaUpdatedPayloadSchema;
 export const ProjectDeletedPayload = ContractsProjectDeletedPayloadSchema;
+export const ProjectOrchestrationRulesUpdatedPayload =
+  ContractsProjectOrchestrationRulesUpdatedPayloadSchema;
+
+export const TaskCreatedPayload = ContractsTaskCreatedPayloadSchema;
+export const TaskMetaUpdatedPayload = ContractsTaskMetaUpdatedPayloadSchema;
+export const TaskStateSetPayload = ContractsTaskStateSetPayloadSchema;
+export const TaskDeletedPayload = ContractsTaskDeletedPayloadSchema;
+export const TaskRunStartRequestedPayload = ContractsTaskRunStartRequestedPayloadSchema;
+export const TaskRunStopRequestedPayload = ContractsTaskRunStopRequestedPayloadSchema;
+export const TaskRunRetryRequestedPayload = ContractsTaskRunRetryRequestedPayloadSchema;
 
 export const ThreadCreatedPayload = ContractsThreadCreatedPayloadSchema;
 export const ThreadMetaUpdatedPayload = ContractsThreadMetaUpdatedPayloadSchema;

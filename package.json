@@ -22,6 +22,10 @@
     }
   },
   "scripts": {
+    "dev": "bun run scripts/dev-runner.ts dev",
+    "dev:server": "bun run scripts/dev-runner.ts dev:server",
+    "dev:web": "bun run scripts/dev-runner.ts dev:web",
+    "dev:desktop": "bun run scripts/dev-runner.ts dev:desktop",
     "lint": "oxlint --report-unused-disable-directives",
     "build": "turbo run build",
     "typecheck": "turbo run typecheck",

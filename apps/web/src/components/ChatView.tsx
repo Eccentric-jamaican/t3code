@@ -117,6 +117,7 @@ import {
   FolderIcon,
   DiffIcon,
   FolderClosedIcon,
+  KanbanSquareIcon,
   LockIcon,
   LockOpenIcon,
   XIcon,
@@ -240,6 +241,8 @@ function buildLocalDraftThread(
     id: threadId,
     codexThreadId: null,
     projectId: draftThread.projectId,
+    origin: "user",
+    taskId: null,
     title: "New thread",
     model: fallbackModel,
     runtimeMode: draftThread.runtimeMode,
@@ -486,6 +489,7 @@ interface ChatViewProps {
 export default function ChatView({ threadId }: ChatViewProps) {
   const threads = useStore((store) => store.threads);
   const projects = useStore((store) => store.projects);
+  const tasks = useStore((store) => store.tasks);
   const markThreadVisited = useStore((store) => store.markThreadVisited);
   const syncServerReadModel = useStore((store) => store.syncServerReadModel);
   const setStoreThreadError = useStore((store) => store.setError);
@@ -671,6 +675,10 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const activeLatestTurn = activeThread?.latestTurn ?? null;
   const latestTurnSettled = isLatestTurnSettled(activeLatestTurn, activeThread?.session ?? null);
   const activeProject = projects.find((p) => p.id === activeThread?.projectId);
+  const activeTask =
+    activeThread?.origin === "task" && activeThread.taskId
+      ? (tasks.find((task) => task.id === activeThread.taskId) ?? null)
+      : null;
 
   useEffect(() => {
     if (!activeThread?.id) return;
@@ -1224,10 +1232,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
       to: "/$threadId",
       params: { threadId },
       replace: true,
-      search: (previous) => {
-        const rest = stripDiffSearchParams(previous);
-        return diffOpen ? rest : { ...rest, diff: "1" };
-      },
+      search: diffOpen ? {} : { diff: "1" },
     });
   }, [diffOpen, navigate, threadId]);
 
@@ -3306,6 +3311,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
           activeThreadId={activeThread.id}
           activeThreadTitle={activeThread.title}
           activeProjectName={activeProject?.name}
+          activeTaskTitle={activeTask?.title ?? null}
           openInCwd={activeThread.worktreePath ?? activeProject?.cwd ?? null}
           activeProjectScripts={activeProject?.scripts}
           preferredScriptId={
@@ -3321,6 +3327,19 @@ export default function ChatView({ threadId }: ChatViewProps) {
           }}
           onAddProjectScript={saveProjectScript}
           onUpdateProjectScript={updateProjectScript}
+          onOpenTask={
+            activeTask
+              ? () => {
+                  void navigate({
+                    to: "/orchestrate",
+                    search: {
+                      projectId: activeThread.projectId,
+                      taskId: activeTask.id,
+                    },
+                  });
+                }
+              : null
+          }
           onToggleDiff={onToggleDiff}
         />
       </header>
@@ -3890,6 +3909,7 @@ interface ChatHeaderProps {
   activeThreadId: ThreadId;
   activeThreadTitle: string;
   activeProjectName: string | undefined;
+  activeTaskTitle: string | null;
   openInCwd: string | null;
   activeProjectScripts: ProjectScript[] | undefined;
   preferredScriptId: string | null;
@@ -3901,6 +3921,7 @@ interface ChatHeaderProps {
   onRunProjectScript: (script: ProjectScript) => void;
   onAddProjectScript: (input: NewProjectScriptInput) => Promise<void>;
   onUpdateProjectScript: (scriptId: string, input: NewProjectScriptInput) => Promise<void>;
+  onOpenTask: (() => void) | null;
   onToggleDiff: () => void;
 }
 
@@ -3908,6 +3929,7 @@ const ChatHeader = memo(function ChatHeader({
   activeThreadId,
   activeThreadTitle,
   activeProjectName,
+  activeTaskTitle,
   openInCwd,
   activeProjectScripts,
   preferredScriptId,
@@ -3919,6 +3941,7 @@ const ChatHeader = memo(function ChatHeader({
   onRunProjectScript,
   onAddProjectScript,
   onUpdateProjectScript,
+  onOpenTask,
   onToggleDiff,
 }: ChatHeaderProps) {
   return (
@@ -3936,6 +3959,12 @@ const ChatHeader = memo(function ChatHeader({
             {activeProjectName}
           </Badge>
         )}
+        {activeTaskTitle ? (
+          <Badge variant="outline" className="max-w-36 shrink-0 truncate gap-1">
+            <KanbanSquareIcon className="size-3" />
+            <span className="truncate">{activeTaskTitle}</span>
+          </Badge>
+        ) : null}
       </div>
       <div className="@container/header-actions flex min-w-0 flex-1 items-center justify-end gap-2 @sm/header-actions:gap-3">
         {activeProjectScripts && (
@@ -3955,6 +3984,12 @@ const ChatHeader = memo(function ChatHeader({
             openInCwd={openInCwd}
           />
         )}
+        {onOpenTask ? (
+          <Button variant="outline" size="xs" className="shrink-0" onClick={onOpenTask}>
+            <KanbanSquareIcon className="size-3" />
+            <span className="hidden sm:inline">Open task</span>
+          </Button>
+        ) : null}
         {activeProjectName && <GitActionsControl gitCwd={gitCwd} activeThreadId={activeThreadId} />}
         <Tooltip>
           <TooltipTrigger

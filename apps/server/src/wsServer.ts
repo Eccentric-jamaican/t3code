@@ -11,6 +11,7 @@ import type { Duplex } from "node:stream";
 
 import Mime from "@effect/platform-node/Mime";
 import {
+  type ChatAttachment as PersistedChatAttachment,
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   type ClientOrchestrationCommand,
@@ -21,6 +22,7 @@ import {
   ProjectId,
   ThreadId,
   TerminalEvent,
+  type UploadChatAttachment,
   WS_CHANNELS,
   WS_METHODS,
   WebSocketRequest,
@@ -205,6 +207,12 @@ function toOptionalProviderMessage(message: string | null): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+function isUploadChatAttachment(
+  attachment: PersistedChatAttachment | UploadChatAttachment,
+): attachment is UploadChatAttachment {
+  return "dataUrl" in attachment;
+}
+
 function overlayProviderStatuses(params: {
   readonly providerStatuses: ReadonlyArray<ServerProviderStatus>;
   readonly providerAccounts: ReadonlyArray<ServerProviderAccountSummary>;
@@ -359,83 +367,126 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   const normalizeDispatchCommand = Effect.fnUntraced(function* (input: {
     readonly command: ClientOrchestrationCommand;
   }) {
-    if (input.command.type !== "thread.turn.start") {
-      return input.command as OrchestrationCommand;
+    const persistClientAttachments = Effect.fnUntraced(function* (params: {
+      readonly ownerId: string;
+      readonly attachments:
+        | ReadonlyArray<PersistedChatAttachment | UploadChatAttachment>
+        | undefined;
+    }) {
+      if (!params.attachments) {
+        return undefined;
+      }
+
+      return yield* Effect.forEach(
+        params.attachments,
+        (attachment) =>
+          Effect.gen(function* () {
+            if (!isUploadChatAttachment(attachment)) {
+              return attachment;
+            }
+
+            const parsed = parseBase64DataUrl(attachment.dataUrl);
+            if (!parsed || !parsed.mimeType.startsWith("image/")) {
+              return yield* new RouteRequestError({
+                message: `Invalid image attachment payload for '${attachment.name}'.`,
+              });
+            }
+
+            const bytes = Buffer.from(parsed.base64, "base64");
+            if (bytes.byteLength === 0 || bytes.byteLength > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES) {
+              return yield* new RouteRequestError({
+                message: `Image attachment '${attachment.name}' is empty or too large.`,
+              });
+            }
+
+            const attachmentId = createAttachmentId(params.ownerId);
+            if (!attachmentId) {
+              return yield* new RouteRequestError({
+                message: "Failed to create a safe attachment id.",
+              });
+            }
+
+            const persistedAttachment: PersistedChatAttachment = {
+              type: "image",
+              id: attachmentId,
+              name: attachment.name,
+              mimeType: parsed.mimeType.toLowerCase(),
+              sizeBytes: bytes.byteLength,
+            };
+
+            const attachmentPath = resolveAttachmentPath({
+              stateDir: serverConfig.stateDir,
+              attachment: persistedAttachment,
+            });
+            if (!attachmentPath) {
+              return yield* new RouteRequestError({
+                message: `Failed to resolve persisted path for '${attachment.name}'.`,
+              });
+            }
+
+            yield* fileSystem.makeDirectory(path.dirname(attachmentPath), { recursive: true }).pipe(
+              Effect.mapError(
+                () =>
+                  new RouteRequestError({
+                    message: `Failed to create attachment directory for '${attachment.name}'.`,
+                  }),
+              ),
+            );
+            yield* fileSystem.writeFile(attachmentPath, bytes).pipe(
+              Effect.mapError(
+                () =>
+                  new RouteRequestError({
+                    message: `Failed to persist attachment '${attachment.name}'.`,
+                  }),
+              ),
+            );
+
+            return persistedAttachment;
+          }),
+        { concurrency: 1 },
+      );
+    });
+
+    switch (input.command.type) {
+      case "thread.turn.start": {
+        const normalizedAttachments = (yield* persistClientAttachments({
+          ownerId: input.command.threadId,
+          attachments: input.command.message.attachments,
+        })) as ReadonlyArray<PersistedChatAttachment> | undefined;
+        return {
+          ...input.command,
+          message: {
+            ...input.command.message,
+            attachments: normalizedAttachments ?? [],
+          },
+        } as OrchestrationCommand;
+      }
+
+      case "task.create": {
+        const normalizedAttachments = (yield* persistClientAttachments({
+          ownerId: input.command.taskId,
+          attachments: input.command.attachments,
+        })) as ReadonlyArray<PersistedChatAttachment> | undefined;
+        return {
+          ...input.command,
+          ...(normalizedAttachments !== undefined ? { attachments: normalizedAttachments } : {}),
+        } as OrchestrationCommand;
+      }
+
+      case "task.meta.update": {
+        const normalizedAttachments = (yield* persistClientAttachments({
+          ownerId: input.command.taskId,
+          attachments: input.command.attachments,
+        })) as ReadonlyArray<PersistedChatAttachment> | undefined;
+        return {
+          ...input.command,
+          ...(normalizedAttachments !== undefined ? { attachments: normalizedAttachments } : {}),
+        } as OrchestrationCommand;
+      }
+
+      default:
+        return input.command as OrchestrationCommand;
     }
-    const turnStartCommand = input.command;
-
-    const normalizedAttachments = yield* Effect.forEach(
-      turnStartCommand.message.attachments,
-      (attachment) =>
-        Effect.gen(function* () {
-          const parsed = parseBase64DataUrl(attachment.dataUrl);
-          if (!parsed || !parsed.mimeType.startsWith("image/")) {
-            return yield* new RouteRequestError({
-              message: `Invalid image attachment payload for '${attachment.name}'.`,
-            });
-          }
-
-          const bytes = Buffer.from(parsed.base64, "base64");
-          if (bytes.byteLength === 0 || bytes.byteLength > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES) {
-            return yield* new RouteRequestError({
-              message: `Image attachment '${attachment.name}' is empty or too large.`,
-            });
-          }
-
-          const attachmentId = createAttachmentId(turnStartCommand.threadId);
-          if (!attachmentId) {
-            return yield* new RouteRequestError({
-              message: "Failed to create a safe attachment id.",
-            });
-          }
-
-          const persistedAttachment = {
-            type: "image" as const,
-            id: attachmentId,
-            name: attachment.name,
-            mimeType: parsed.mimeType.toLowerCase(),
-            sizeBytes: bytes.byteLength,
-          };
-
-          const attachmentPath = resolveAttachmentPath({
-            stateDir: serverConfig.stateDir,
-            attachment: persistedAttachment,
-          });
-          if (!attachmentPath) {
-            return yield* new RouteRequestError({
-              message: `Failed to resolve persisted path for '${attachment.name}'.`,
-            });
-          }
-
-          yield* fileSystem.makeDirectory(path.dirname(attachmentPath), { recursive: true }).pipe(
-            Effect.mapError(
-              () =>
-                new RouteRequestError({
-                  message: `Failed to create attachment directory for '${attachment.name}'.`,
-                }),
-            ),
-          );
-          yield* fileSystem.writeFile(attachmentPath, bytes).pipe(
-            Effect.mapError(
-              () =>
-                new RouteRequestError({
-                  message: `Failed to persist attachment '${attachment.name}'.`,
-                }),
-            ),
-          );
-
-          return persistedAttachment;
-        }),
-      { concurrency: 1 },
-    );
-
-    return {
-      ...turnStartCommand,
-      message: {
-        ...turnStartCommand.message,
-        attachments: normalizedAttachments,
-      },
-    } satisfies OrchestrationCommand;
   });
 
   // HTTP server — serves static files or redirects to Vite dev server

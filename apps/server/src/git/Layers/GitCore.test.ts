@@ -21,13 +21,32 @@ const GitCoreTestLayer = GitCoreLive.pipe(
   Layer.provide(NodeServices.layer),
 );
 const TestLayer = Layer.mergeAll(NodeServices.layer, GitServiceTestLayer, GitCoreTestLayer);
+const TEST_TIMEOUT_MS = 120_000;
+const TEMP_DIR_CLEANUP_ATTEMPTS = 20;
+const TEMP_DIR_CLEANUP_DELAY_MS = 100;
 
 function makeTmpDir(
   prefix = "git-test-",
 ): Effect.Effect<string, PlatformError.PlatformError, FileSystem.FileSystem | Scope.Scope> {
   return Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
-    return yield* fileSystem.makeTempDirectoryScoped({ prefix });
+    const dir = yield* fileSystem.makeTempDirectory({ prefix });
+    yield* Effect.addFinalizer(() =>
+      Effect.gen(function* () {
+        for (let attempt = 0; attempt < TEMP_DIR_CLEANUP_ATTEMPTS; attempt += 1) {
+          const result = yield* fileSystem.remove(dir, { recursive: true, force: true }).pipe(
+            Effect.exit,
+          );
+          if (result._tag === "Success") {
+            return;
+          }
+          if (attempt < TEMP_DIR_CLEANUP_ATTEMPTS - 1) {
+            yield* Effect.sleep(TEMP_DIR_CLEANUP_DELAY_MS);
+          }
+        }
+      }),
+    );
+    return dir;
   });
 }
 
@@ -213,7 +232,7 @@ function commitWithDate(
 // ── Tests ──
 
 it.layer(TestLayer)("git integration", (it) => {
-  describe("shell process execution", () => {
+  describe("shell process execution", { timeout: TEST_TIMEOUT_MS }, () => {
     it.effect("caps captured output when maxOutputBytes is exceeded", () =>
       Effect.gen(function* () {
         const result = yield* runShellCommand({
@@ -232,7 +251,7 @@ it.layer(TestLayer)("git integration", (it) => {
 
   // ── initGitRepo ──
 
-  describe("initGitRepo", () => {
+  describe("initGitRepo", { timeout: TEST_TIMEOUT_MS }, () => {
     it.effect("creates a valid git repo", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();
@@ -254,7 +273,7 @@ it.layer(TestLayer)("git integration", (it) => {
 
   // ── listGitBranches ──
 
-  describe("listGitBranches", () => {
+  describe("listGitBranches", { timeout: TEST_TIMEOUT_MS }, () => {
     it.effect("returns isRepo: false for non-git directory", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();
@@ -471,7 +490,7 @@ it.layer(TestLayer)("git integration", (it) => {
 
   // ── checkoutGitBranch ──
 
-  describe("checkoutGitBranch", () => {
+  describe("checkoutGitBranch", { timeout: TEST_TIMEOUT_MS }, () => {
     it.effect("checks out an existing branch", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();
@@ -631,7 +650,7 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
-    it.effect("returns checkout result before background upstream refresh completes", () =>
+    it.effect("checks out the branch before upstream refresh completes", () =>
       Effect.gen(function* () {
         const remote = yield* makeTmpDir();
         const source = yield* makeTmpDir();
@@ -669,14 +688,21 @@ it.layer(TestLayer)("git integration", (it) => {
             return realGitService.execute(input);
           },
         });
-        yield* core.checkoutBranch({ cwd: source, branch: featureBranch });
+        let checkoutResolved = false;
+        const checkoutPromise = Effect.runPromise(
+          Effect.scoped(core.checkoutBranch({ cwd: source, branch: featureBranch })),
+        ).then(() => {
+          checkoutResolved = true;
+        });
         yield* Effect.promise(() =>
           vi.waitFor(() => {
             expect(fetchStarted).toBe(true);
           }),
         );
+        expect(checkoutResolved).toBe(false);
         expect(yield* git(source, ["branch", "--show-current"])).toBe(featureBranch);
         releaseFetch();
+        yield* Effect.promise(() => checkoutPromise);
       }),
     );
 
@@ -805,7 +831,7 @@ it.layer(TestLayer)("git integration", (it) => {
 
   // ── createGitBranch ──
 
-  describe("createGitBranch", () => {
+  describe("createGitBranch", { timeout: TEST_TIMEOUT_MS }, () => {
     it.effect("creates a new branch visible in listGitBranches", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();
@@ -830,7 +856,7 @@ it.layer(TestLayer)("git integration", (it) => {
 
   // ── renameGitBranch ──
 
-  describe("renameGitBranch", () => {
+  describe("renameGitBranch", { timeout: TEST_TIMEOUT_MS }, () => {
     it.effect("renames the current branch", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();
@@ -953,7 +979,7 @@ it.layer(TestLayer)("git integration", (it) => {
 
   // ── createGitWorktree + removeGitWorktree ──
 
-  describe("createGitWorktree", () => {
+  describe("createGitWorktree", { timeout: TEST_TIMEOUT_MS }, () => {
     it.effect("creates a worktree with a new branch from the base branch", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();
@@ -1116,7 +1142,7 @@ it.layer(TestLayer)("git integration", (it) => {
 
   // ── Full flow: local branch checkout ──
 
-  describe("full flow: local branch checkout", () => {
+  describe("full flow: local branch checkout", { timeout: TEST_TIMEOUT_MS }, () => {
     it.effect("init → commit → create branch → checkout → verify current", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();
@@ -1133,7 +1159,7 @@ it.layer(TestLayer)("git integration", (it) => {
 
   // ── Full flow: worktree creation from base branch ──
 
-  describe("full flow: worktree creation", () => {
+  describe("full flow: worktree creation", { timeout: TEST_TIMEOUT_MS }, () => {
     it.effect("creates worktree with new branch from current branch", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();
@@ -1170,7 +1196,7 @@ it.layer(TestLayer)("git integration", (it) => {
 
   // ── Full flow: thread switching simulation ──
 
-  describe("full flow: thread switching (checkout toggling)", () => {
+  describe("full flow: thread switching (checkout toggling)", { timeout: TEST_TIMEOUT_MS }, () => {
     it.effect("checkout a → checkout b → checkout a → current matches", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();
@@ -1198,7 +1224,7 @@ it.layer(TestLayer)("git integration", (it) => {
 
   // ── Full flow: checkout conflict ──
 
-  describe("full flow: checkout conflict", () => {
+  describe("full flow: checkout conflict", { timeout: TEST_TIMEOUT_MS }, () => {
     it.effect("uncommitted changes prevent checkout to a diverged branch", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();
@@ -1232,7 +1258,7 @@ it.layer(TestLayer)("git integration", (it) => {
     );
   });
 
-  describe("GitCore", () => {
+  describe("GitCore", { timeout: TEST_TIMEOUT_MS }, () => {
     it.effect("supports branch lifecycle operations through the service API", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();

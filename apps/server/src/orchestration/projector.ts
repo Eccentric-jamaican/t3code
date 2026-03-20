@@ -2,7 +2,10 @@ import type { OrchestrationEvent, OrchestrationReadModel, ThreadId } from "@t3to
 import {
   OrchestrationCheckpointSummary,
   OrchestrationMessage,
+  OrchestrationProjectRules,
   OrchestrationSession,
+  OrchestrationTask,
+  OrchestrationTaskRuntime,
   OrchestrationThread,
 } from "@t3tools/contracts";
 import { Effect, Schema } from "effect";
@@ -13,6 +16,11 @@ import {
   ProjectCreatedPayload,
   ProjectDeletedPayload,
   ProjectMetaUpdatedPayload,
+  ProjectOrchestrationRulesUpdatedPayload,
+  TaskCreatedPayload,
+  TaskDeletedPayload,
+  TaskMetaUpdatedPayload,
+  TaskStateSetPayload,
   ThreadActivityAppendedPayload,
   ThreadCreatedPayload,
   ThreadDeletedPayload,
@@ -153,10 +161,81 @@ function compareThreadActivities(
   return left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id);
 }
 
+function deriveTaskRuntimeStatus(input: {
+  readonly task: OrchestrationTask;
+  readonly thread: OrchestrationThread | null;
+}): OrchestrationTaskRuntime["status"] {
+  const { task, thread } = input;
+  if (!thread) {
+    return task.state === "running" ? "queued" : "idle";
+  }
+  const latestApprovalActivity = [...thread.activities]
+    .reverse()
+    .find((activity) => activity.kind.includes("approval") || activity.kind.includes("user-input"));
+  if (latestApprovalActivity?.kind.includes("user-input")) {
+    return "awaiting_input";
+  }
+  if (latestApprovalActivity?.kind.includes("approval")) {
+    return "awaiting_approval";
+  }
+  if (thread.session?.status === "starting") {
+    return "starting";
+  }
+  if (thread.session?.status === "running") {
+    return "running";
+  }
+  if (thread.session?.status === "error") {
+    return "error";
+  }
+  if (task.state === "blocked") {
+    return "error";
+  }
+  if (task.state === "running") {
+    return "queued";
+  }
+  if (thread.session?.status === "stopped") {
+    return "stopped";
+  }
+  return "idle";
+}
+
+function deriveTaskRuntimes(model: OrchestrationReadModel): Array<OrchestrationTaskRuntime> {
+  return model.tasks.map((task) => {
+    const thread = task.threadId ? model.threads.find((entry) => entry.id === task.threadId) ?? null : null;
+    const lastActivityAt = [
+      task.updatedAt,
+      thread?.updatedAt ?? null,
+      thread?.session?.updatedAt ?? null,
+      thread?.latestTurn?.completedAt ?? null,
+      thread?.latestTurn?.startedAt ?? null,
+    ]
+      .filter((value): value is string => value !== null)
+      .reduce<string | null>((latest, value) => (latest === null || value > latest ? value : latest), null);
+    return {
+      taskId: task.id,
+      status: deriveTaskRuntimeStatus({ task, thread }),
+      activeTurnId: thread?.session?.activeTurnId ?? null,
+      lastError: thread?.session?.lastError ?? null,
+      lastActivityAt,
+      updatedAt: lastActivityAt ?? task.updatedAt,
+    };
+  });
+}
+
+function withDerivedTaskRuntimes(model: OrchestrationReadModel): OrchestrationReadModel {
+  return {
+    ...model,
+    taskRuntimes: deriveTaskRuntimes(model),
+  };
+}
+
 export function createEmptyReadModel(nowIso: string): OrchestrationReadModel {
   return {
     snapshotSequence: 0,
     projects: [],
+    tasks: [],
+    taskRuntimes: [],
+    projectRules: [],
     threads: [],
     updatedAt: nowIso,
   };
@@ -238,6 +317,123 @@ export function projectEvent(
         })),
       );
 
+    case "project.orchestration-rules-updated":
+      return decodeForEvent(
+        ProjectOrchestrationRulesUpdatedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const nextRules: OrchestrationProjectRules = {
+            projectId: payload.projectId,
+            promptTemplate: payload.promptTemplate,
+            defaultModel: payload.defaultModel,
+            defaultRuntimeMode: payload.defaultRuntimeMode,
+            onSuccessMoveTo: payload.onSuccessMoveTo,
+            onFailureMoveTo: payload.onFailureMoveTo,
+            updatedAt: payload.updatedAt,
+          };
+          const existing = nextBase.projectRules.find((entry) => entry.projectId === payload.projectId);
+          return withDerivedTaskRuntimes({
+            ...nextBase,
+            projectRules: existing
+              ? nextBase.projectRules.map((entry) =>
+                  entry.projectId === payload.projectId ? nextRules : entry,
+                )
+              : [...nextBase.projectRules, nextRules],
+          });
+        }),
+      );
+
+    case "task.created":
+      return decodeForEvent(TaskCreatedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => {
+          const nextTask: OrchestrationTask = {
+            id: payload.taskId,
+            projectId: payload.projectId,
+            title: payload.title,
+            brief: payload.brief,
+            acceptanceCriteria: payload.acceptanceCriteria,
+            ...(payload.attachments !== undefined ? { attachments: payload.attachments } : {}),
+            state: payload.state,
+            priority: payload.priority,
+            threadId: payload.threadId,
+            createdAt: payload.createdAt,
+            updatedAt: payload.updatedAt,
+            deletedAt: null,
+          };
+          const existing = nextBase.tasks.find((entry) => entry.id === payload.taskId);
+          return withDerivedTaskRuntimes({
+            ...nextBase,
+            tasks: existing
+              ? nextBase.tasks.map((entry) => (entry.id === payload.taskId ? nextTask : entry))
+              : [...nextBase.tasks, nextTask],
+          });
+        }),
+      );
+
+    case "task.meta-updated":
+      return decodeForEvent(TaskMetaUpdatedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) =>
+          withDerivedTaskRuntimes({
+            ...nextBase,
+            tasks: nextBase.tasks.map((task) =>
+              task.id === payload.taskId
+                ? {
+                    ...task,
+                    ...(payload.title !== undefined ? { title: payload.title } : {}),
+                    ...(payload.brief !== undefined ? { brief: payload.brief } : {}),
+                    ...(payload.acceptanceCriteria !== undefined
+                      ? { acceptanceCriteria: payload.acceptanceCriteria }
+                      : {}),
+                    ...(payload.attachments !== undefined ? { attachments: payload.attachments } : {}),
+                    ...(payload.priority !== undefined ? { priority: payload.priority } : {}),
+                    ...(payload.threadId !== undefined ? { threadId: payload.threadId } : {}),
+                    updatedAt: payload.updatedAt,
+                  }
+                : task,
+            ),
+          }),
+        ),
+      );
+
+    case "task.state-set":
+      return decodeForEvent(TaskStateSetPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) =>
+          withDerivedTaskRuntimes({
+            ...nextBase,
+            tasks: nextBase.tasks.map((task) =>
+              task.id === payload.taskId
+                ? {
+                    ...task,
+                    state: payload.state,
+                    updatedAt: payload.updatedAt,
+                  }
+                : task,
+            ),
+          }),
+        ),
+      );
+
+    case "task.deleted":
+      return decodeForEvent(TaskDeletedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) =>
+          withDerivedTaskRuntimes({
+            ...nextBase,
+            tasks: nextBase.tasks.map((task) =>
+              task.id === payload.taskId
+                ? {
+                    ...task,
+                    deletedAt: payload.deletedAt,
+                    updatedAt: payload.deletedAt,
+                  }
+                : task,
+            ),
+          }),
+        ),
+      );
+
     case "thread.created":
       return Effect.gen(function* () {
         const payload = yield* decodeForEvent(
@@ -251,6 +447,8 @@ export function projectEvent(
           {
             id: payload.threadId,
             projectId: payload.projectId,
+            origin: payload.origin,
+            taskId: payload.taskId,
             title: payload.title,
             model: payload.model,
             runtimeMode: payload.runtimeMode,
@@ -271,12 +469,12 @@ export function projectEvent(
           "thread",
         );
         const existing = nextBase.threads.find((entry) => entry.id === thread.id);
-        return {
+        return withDerivedTaskRuntimes({
           ...nextBase,
           threads: existing
             ? nextBase.threads.map((entry) => (entry.id === thread.id ? thread : entry))
             : [...nextBase.threads, thread],
-        };
+        });
       });
 
     case "thread.deleted":
@@ -418,7 +616,7 @@ export function projectEvent(
           "session",
         );
 
-        return {
+        return withDerivedTaskRuntimes({
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
             session,
@@ -448,7 +646,7 @@ export function projectEvent(
                 : thread.latestTurn,
             updatedAt: event.occurredAt,
           }),
-        };
+        });
       });
 
     case "thread.proposed-plan-upserted":
@@ -518,7 +716,7 @@ export function projectEvent(
           .toSorted((left, right) => left.checkpointTurnCount - right.checkpointTurnCount)
           .slice(-MAX_THREAD_CHECKPOINTS);
 
-        return {
+        return withDerivedTaskRuntimes({
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
             checkpoints,
@@ -542,7 +740,7 @@ export function projectEvent(
             },
             updatedAt: event.occurredAt,
           }),
-        };
+        });
       });
 
     case "thread.reverted":
@@ -586,7 +784,7 @@ export function projectEvent(
                   assistantMessageId: latestCheckpoint.assistantMessageId,
                 };
 
-          return {
+          return withDerivedTaskRuntimes({
             ...nextBase,
             threads: updateThread(nextBase.threads, payload.threadId, {
               checkpoints,
@@ -596,7 +794,7 @@ export function projectEvent(
               latestTurn,
               updatedAt: event.occurredAt,
             }),
-          };
+          });
         }),
       );
 
@@ -620,17 +818,17 @@ export function projectEvent(
             .toSorted(compareThreadActivities)
             .slice(-500);
 
-          return {
+          return withDerivedTaskRuntimes({
             ...nextBase,
             threads: updateThread(nextBase.threads, payload.threadId, {
               activities,
               updatedAt: event.occurredAt,
             }),
-          };
+          });
         }),
       );
 
     default:
-      return Effect.succeed(nextBase);
+      return Effect.succeed(withDerivedTaskRuntimes(nextBase));
   }
 }

@@ -135,6 +135,8 @@ describe("decider project scripts", () => {
         payload: {
           threadId: ThreadId.makeUnsafe("thread-1"),
           projectId: asProjectId("project-1"),
+          origin: "user",
+          taskId: null,
           title: "Thread",
           model: "gpt-5-codex",
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -243,6 +245,8 @@ describe("decider project scripts", () => {
         payload: {
           threadId: ThreadId.makeUnsafe("thread-1"),
           projectId: asProjectId("project-1"),
+          origin: "user",
+          taskId: null,
           title: "Thread",
           model: "gpt-5-codex",
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -323,6 +327,8 @@ describe("decider project scripts", () => {
         payload: {
           threadId: ThreadId.makeUnsafe("thread-1"),
           projectId: asProjectId("project-1"),
+          origin: "user",
+          taskId: null,
           title: "Thread",
           model: "gpt-5-codex",
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,

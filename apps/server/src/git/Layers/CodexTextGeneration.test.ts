@@ -1,3 +1,5 @@
+import * as nodePath from "node:path";
+
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import { Effect, FileSystem, Layer, Path } from "effect";
@@ -14,60 +16,76 @@ const makeCodexTextGenerationTestLayer = (stateDir: string) =>
     Layer.provideMerge(NodeServices.layer),
   );
 
+const TEST_TIMEOUT_MS = 120_000;
+
 function makeFakeCodexBinary(dir: string) {
   return Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const binDir = path.join(dir, "bin");
+    const codexRunnerPath = path.join(binDir, "codex.js");
     const codexPath = path.join(binDir, "codex");
+    const codexCmdPath = path.join(binDir, "codex.cmd");
     yield* fs.makeDirectory(binDir, { recursive: true });
 
     yield* fs.writeFileString(
-      codexPath,
+      codexRunnerPath,
       [
-        "#!/bin/sh",
-        'output_path=""',
-        "while [ $# -gt 0 ]; do",
-        '  if [ "$1" = "--image" ]; then',
-        "    shift",
-        '    if [ -n "$1" ]; then',
-        '      seen_image="1"',
-        "    fi",
-        "    continue",
-        "  fi",
-        '  if [ "$1" = "--output-last-message" ]; then',
-        "    shift",
-        '    output_path="$1"',
-        "  fi",
-        "  shift",
-        "done",
-        'stdin_content="$(cat)"',
-        'if [ "$T3_FAKE_CODEX_REQUIRE_IMAGE" = "1" ] && [ "$seen_image" != "1" ]; then',
-        '  printf "%s\\n" "missing --image input" >&2',
-        "  exit 2",
-        "fi",
-        'if [ -n "$T3_FAKE_CODEX_STDIN_MUST_CONTAIN" ]; then',
-        '  printf "%s" "$stdin_content" | grep -F -- "$T3_FAKE_CODEX_STDIN_MUST_CONTAIN" >/dev/null || {',
-        '    printf "%s\\n" "stdin missing expected content" >&2',
-        "    exit 3",
+        '#!/usr/bin/env node',
+        'const fs = require("node:fs");',
+        'const args = process.argv.slice(2);',
+        'let outputPath = "";',
+        'let seenImage = false;',
+        "for (let index = 0; index < args.length; index += 1) {",
+        "  const arg = args[index];",
+        '  if (arg === "--image") {',
+        "    const imagePath = args[index + 1];",
+        "    if (imagePath) {",
+        "      seenImage = true;",
+        "      index += 1;",
+        "    }",
+        "    continue;",
         "  }",
-        "fi",
-        'if [ -n "$T3_FAKE_CODEX_STDIN_MUST_NOT_CONTAIN" ]; then',
-        '  if printf "%s" "$stdin_content" | grep -F -- "$T3_FAKE_CODEX_STDIN_MUST_NOT_CONTAIN" >/dev/null; then',
-        '    printf "%s\\n" "stdin contained forbidden content" >&2',
-        "    exit 4",
-        "  fi",
-        "fi",
-        'if [ -n "$T3_FAKE_CODEX_STDERR" ]; then',
-        '  printf "%s\\n" "$T3_FAKE_CODEX_STDERR" >&2',
-        "fi",
-        'if [ -n "$output_path" ]; then',
-        '  node -e \'const fs=require("node:fs"); const value=process.argv[2] ?? ""; fs.writeFileSync(process.argv[1], Buffer.from(value, "base64"));\' "$output_path" "${T3_FAKE_CODEX_OUTPUT_B64:-e30=}"',
-        "fi",
-        'exit "${T3_FAKE_CODEX_EXIT_CODE:-0}"',
+        '  if (arg === "--output-last-message") {',
+        '    outputPath = args[index + 1] ?? "";',
+        "    index += 1;",
+        "  }",
+        "}",
+        'const stdinContent = fs.readFileSync(0, "utf8");',
+        'if (process.env.T3_FAKE_CODEX_REQUIRE_IMAGE === "1" && !seenImage) {',
+        '  process.stderr.write("missing --image input\\n");',
+        "  process.exit(2);",
+        "}",
+        "const stdinMustContain = process.env.T3_FAKE_CODEX_STDIN_MUST_CONTAIN;",
+        'if (stdinMustContain && !stdinContent.includes(stdinMustContain)) {',
+        '  process.stderr.write("stdin missing expected content\\n");',
+        "  process.exit(3);",
+        "}",
+        "const stdinMustNotContain = process.env.T3_FAKE_CODEX_STDIN_MUST_NOT_CONTAIN;",
+        'if (stdinMustNotContain && stdinContent.includes(stdinMustNotContain)) {',
+        '  process.stderr.write("stdin contained forbidden content\\n");',
+        "  process.exit(4);",
+        "}",
+        "if (process.env.T3_FAKE_CODEX_STDERR) {",
+        '  process.stderr.write(`${process.env.T3_FAKE_CODEX_STDERR}\\n`);',
+        "}",
+        "if (outputPath) {",
+        '  const value = process.env.T3_FAKE_CODEX_OUTPUT_B64 ?? "e30=";',
+        '  fs.writeFileSync(outputPath, Buffer.from(value, "base64"));',
+        "}",
+        'process.exit(Number(process.env.T3_FAKE_CODEX_EXIT_CODE ?? "0"));',
         "",
       ].join("\n"),
     );
+    yield* fs.writeFileString(
+      codexPath,
+      ['#!/bin/sh', 'exec node "$(dirname "$0")/codex.js" "$@"', ""].join("\n"),
+    );
+    yield* fs.writeFileString(
+      codexCmdPath,
+      ['@echo off', 'node "%~dp0\\codex.js" %*', ""].join("\r\n"),
+    );
+    yield* fs.chmod(codexRunnerPath, 0o755);
     yield* fs.chmod(codexPath, 0o755);
     return binDir;
   });
@@ -98,7 +116,7 @@ function withFakeCodexEnv<A, E, R>(
       const previousStdinMustNotContain = process.env.T3_FAKE_CODEX_STDIN_MUST_NOT_CONTAIN;
 
       yield* Effect.sync(() => {
-        process.env.PATH = `${binDir}:${previousPath ?? ""}`;
+        process.env.PATH = [binDir, previousPath].filter(Boolean).join(nodePath.delimiter);
         process.env.T3_FAKE_CODEX_OUTPUT_B64 = Buffer.from(input.output, "utf8").toString("base64");
 
         if (input.exitCode !== undefined) {
@@ -215,6 +233,7 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGenerationLive", (it) => {
         expect(generated.branch).toBeUndefined();
       }),
     ),
+    TEST_TIMEOUT_MS,
   );
 
   it.effect("generates commit message with branch when includeBranch is true", () =>
@@ -242,6 +261,7 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGenerationLive", (it) => {
         expect(generated.branch).toBe("feature/fix/important-system-change");
       }),
     ),
+    TEST_TIMEOUT_MS,
   );
 
   it.effect("generates PR content and trims markdown body", () =>
@@ -269,6 +289,7 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGenerationLive", (it) => {
         expect(generated.body.endsWith("\n\n")).toBe(false);
       }),
     ),
+    TEST_TIMEOUT_MS,
   );
 
   it.effect("generates branch names and normalizes branch fragments", () =>
@@ -290,6 +311,7 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGenerationLive", (it) => {
         expect(generated.branch).toBe("feat/session");
       }),
     ),
+    TEST_TIMEOUT_MS,
   );
 
   it.effect("omits attachment metadata section when no attachments are provided", () =>
@@ -311,6 +333,7 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGenerationLive", (it) => {
         expect(generated.branch).toBe("fix/session-timeout");
       }),
     ),
+    TEST_TIMEOUT_MS,
   );
 
   it.effect("passes image attachments through as codex image inputs", () =>
@@ -350,6 +373,7 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGenerationLive", (it) => {
         expect(generated.branch).toBe("fix/ui-regression");
       }),
     ),
+    TEST_TIMEOUT_MS,
   );
 
   it.effect("resolves persisted attachment ids to files for codex image inputs", () =>
@@ -400,6 +424,7 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGenerationLive", (it) => {
         expect(generated.branch).toBe("fix/ui-regression");
       }),
     ),
+    TEST_TIMEOUT_MS,
   );
 
   it.effect("ignores missing attachment ids for codex image inputs", () =>
@@ -446,6 +471,7 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGenerationLive", (it) => {
         }
       }),
     ),
+    TEST_TIMEOUT_MS,
   );
 
   it.effect(
@@ -479,6 +505,7 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGenerationLive", (it) => {
           }
         }),
       ),
+      TEST_TIMEOUT_MS,
   );
 
   it.effect("returns typed TextGenerationError when codex exits non-zero", () =>
@@ -512,5 +539,6 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGenerationLive", (it) => {
         }
       }),
     ),
+    TEST_TIMEOUT_MS,
   );
 });

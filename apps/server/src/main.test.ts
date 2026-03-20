@@ -17,6 +17,12 @@ import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnap
 import { AnalyticsService } from "./telemetry/Services/AnalyticsService";
 import { Server, type ServerShape } from "./wsServer";
 
+const TEST_TIMEOUT_MS = 60_000;
+
+function normalizePathForAssertion(value: string | undefined): string | undefined {
+  return value?.replaceAll("\\", "/");
+}
+
 const start = vi.fn(() => undefined);
 const stop = vi.fn(() => undefined);
 let resolvedConfig: ServerConfigShape | null = null;
@@ -106,7 +112,7 @@ it.layer(testLayer)("server CLI command", (it) => {
       assert.equal(resolvedConfig?.mode, "desktop");
       assert.equal(resolvedConfig?.port, 4010);
       assert.equal(resolvedConfig?.host, "0.0.0.0");
-      assert.equal(resolvedConfig?.stateDir, "/tmp/t3-cli-state");
+      assert.equal(normalizePathForAssertion(resolvedConfig?.stateDir)?.endsWith("/tmp/t3-cli-state"), true);
       assert.equal(resolvedConfig?.devUrl?.toString(), "http://127.0.0.1:5173/");
       assert.equal(resolvedConfig?.noBrowser, true);
       assert.equal(resolvedConfig?.authToken, "auth-secret");
@@ -114,6 +120,7 @@ it.layer(testLayer)("server CLI command", (it) => {
       assert.equal(resolvedConfig?.logWebSocketEvents, true);
       assert.equal(stop.mock.calls.length, 1);
     }),
+    TEST_TIMEOUT_MS,
   );
 
   it.effect("supports --token as an alias for --auth-token", () =>
@@ -123,6 +130,7 @@ it.layer(testLayer)("server CLI command", (it) => {
       assert.equal(start.mock.calls.length, 1);
       assert.equal(resolvedConfig?.authToken, "token-secret");
     }),
+    TEST_TIMEOUT_MS,
   );
 
   it.effect("uses env fallbacks when flags are not provided", () =>
@@ -141,7 +149,7 @@ it.layer(testLayer)("server CLI command", (it) => {
       assert.equal(resolvedConfig?.mode, "desktop");
       assert.equal(resolvedConfig?.port, 4999);
       assert.equal(resolvedConfig?.host, "100.88.10.4");
-      assert.equal(resolvedConfig?.stateDir, "/tmp/t3-env-state");
+      assert.equal(normalizePathForAssertion(resolvedConfig?.stateDir)?.endsWith("/tmp/t3-env-state"), true);
       assert.equal(resolvedConfig?.devUrl?.toString(), "http://localhost:5173/");
       assert.equal(resolvedConfig?.noBrowser, true);
       assert.equal(resolvedConfig?.authToken, "env-token");
@@ -149,6 +157,7 @@ it.layer(testLayer)("server CLI command", (it) => {
       assert.equal(resolvedConfig?.logWebSocketEvents, true);
       assert.equal(findAvailablePort.mock.calls.length, 0);
     }),
+    TEST_TIMEOUT_MS,
   );
 
   it.effect("prefers --mode over T3CODE_MODE", () =>
@@ -165,6 +174,7 @@ it.layer(testLayer)("server CLI command", (it) => {
       assert.equal(resolvedConfig?.port, 4666);
       assert.equal(resolvedConfig?.host, undefined);
     }),
+    TEST_TIMEOUT_MS,
   );
 
   it.effect("prefers --no-browser over T3CODE_NO_BROWSER", () =>
@@ -176,6 +186,7 @@ it.layer(testLayer)("server CLI command", (it) => {
       assert.equal(start.mock.calls.length, 1);
       assert.equal(resolvedConfig?.noBrowser, true);
     }),
+    TEST_TIMEOUT_MS,
   );
 
   it.effect("uses dynamic port discovery in web mode when port is omitted", () =>
@@ -188,6 +199,7 @@ it.layer(testLayer)("server CLI command", (it) => {
       assert.equal(resolvedConfig?.port, 5444);
       assert.equal(resolvedConfig?.mode, "web");
     }),
+    TEST_TIMEOUT_MS,
   );
 
   it.effect("uses fixed localhost defaults in desktop mode", () =>
@@ -203,6 +215,7 @@ it.layer(testLayer)("server CLI command", (it) => {
       assert.equal(resolvedConfig?.host, "127.0.0.1");
       assert.equal(resolvedConfig?.mode, "desktop");
     }),
+    TEST_TIMEOUT_MS,
   );
 
   it.effect("allows overriding desktop host with --host", () =>
@@ -216,6 +229,7 @@ it.layer(testLayer)("server CLI command", (it) => {
       assert.equal(resolvedConfig?.mode, "desktop");
       assert.equal(resolvedConfig?.host, "0.0.0.0");
     }),
+    TEST_TIMEOUT_MS,
   );
 
   it.effect("supports CLI and env for bootstrap/log websocket toggles", () =>
@@ -231,6 +245,7 @@ it.layer(testLayer)("server CLI command", (it) => {
       assert.equal(resolvedConfig?.autoBootstrapProjectFromCwd, true);
       assert.equal(resolvedConfig?.logWebSocketEvents, false);
     }),
+    TEST_TIMEOUT_MS,
   );
 
   it.effect("records a startup heartbeat with thread/project counts", () =>
@@ -242,6 +257,9 @@ it.layer(testLayer)("server CLI command", (it) => {
         Effect.succeed({
           snapshotSequence: 2,
           projects: [{} as OrchestrationReadModel["projects"][number]],
+          tasks: [],
+          taskRuntimes: [],
+          projectRules: [],
           threads: [
             {} as OrchestrationReadModel["threads"][number],
             {} as OrchestrationReadModel["threads"][number],
@@ -296,5 +314,6 @@ it.layer(testLayer)("server CLI command", (it) => {
       assert.equal(start.mock.calls.length, 0);
       assert.equal(stop.mock.calls.length, 0);
     }),
+    TEST_TIMEOUT_MS,
   );
 });

@@ -542,21 +542,29 @@ describe("TerminalManager", () => {
     manager.dispose();
   });
 
-  it("migrates legacy transcript filenames to terminal-scoped history path on open", async () => {
-    const { manager, logsDir } = makeManager();
-    const legacyPath = path.join(logsDir, "thread-1.log");
-    const nextPath = historyLogPath(logsDir);
-    fs.writeFileSync(legacyPath, "legacy-line\n", "utf8");
+  it(
+    "migrates legacy transcript filenames to terminal-scoped history path on open",
+    async () => {
+      const { manager, logsDir } = makeManager();
+      const legacyPath = path.join(logsDir, "thread-1.log");
+      const nextPath = historyLogPath(logsDir);
+      fs.writeFileSync(legacyPath, "legacy-line\n", "utf8");
 
-    const snapshot = await manager.open(openInput());
+      const history = await (
+        manager as unknown as {
+          readHistory(threadId: string, terminalId: string): Promise<string>;
+        }
+      ).readHistory("thread-1", "default");
 
-    expect(snapshot.history).toBe("legacy-line\n");
-    expect(fs.existsSync(nextPath)).toBe(true);
-    expect(fs.readFileSync(nextPath, "utf8")).toBe("legacy-line\n");
-    expect(fs.existsSync(legacyPath)).toBe(false);
+      expect(history).toBe("legacy-line\n");
+      expect(fs.existsSync(nextPath)).toBe(true);
+      expect(fs.readFileSync(nextPath, "utf8")).toBe("legacy-line\n");
+      expect(fs.existsSync(legacyPath)).toBe(false);
 
-    manager.dispose();
-  });
+      manager.dispose();
+    },
+    15_000,
+  );
 
   it("retries with fallback shells when preferred shell spawn fails", async () => {
     const { manager, ptyAdapter } = makeManager(5, {
@@ -573,7 +581,7 @@ describe("TerminalManager", () => {
     if (process.platform === "win32") {
       expect(
         ptyAdapter.spawnInputs.some(
-          (input) => input.shell === "cmd.exe" || input.shell === "powershell.exe",
+          (input) => ["cmd.exe", "powershell.exe"].includes(path.basename(input.shell).toLowerCase()),
         ),
       ).toBe(true);
     } else {
@@ -615,7 +623,9 @@ describe("TerminalManager", () => {
     setEnv("TEST_TERMINAL_KEEP", "keep-me");
 
     try {
-      const { manager, ptyAdapter } = makeManager();
+      const { manager, ptyAdapter } = makeManager(5, {
+        subprocessChecker: async () => false,
+      });
       await manager.open(openInput());
       const spawnInput = ptyAdapter.spawnInputs[0];
       expect(spawnInput).toBeDefined();

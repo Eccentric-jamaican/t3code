@@ -65,10 +65,15 @@ function createFixture(): TestFixture {
           deletedAt: null,
         },
       ],
+      tasks: [],
+      taskRuntimes: [],
+      projectRules: [],
       threads: [
         {
           id: THREAD_ID,
           projectId: PROJECT_ID,
+          origin: "user",
+          taskId: null,
           title: "Settings popover backend wiring",
           model: "gpt-5",
           interactionMode: "default",
@@ -170,6 +175,55 @@ function createFixture(): TestFixture {
       bootstrapProjectId: PROJECT_ID,
       bootstrapThreadId: THREAD_ID,
     },
+  };
+}
+
+function makeProjectEntry(
+  id: ProjectId,
+  title: string,
+  overrides: Partial<OrchestrationReadModel["projects"][number]> = {},
+): OrchestrationReadModel["projects"][number] {
+  return {
+    id,
+    title,
+    workspaceRoot: `C:\\workspace\\${title}`,
+    defaultModel: "gpt-5",
+    scripts: [],
+    createdAt: NOW_ISO,
+    updatedAt: NOW_ISO,
+    deletedAt: null,
+    ...overrides,
+  };
+}
+
+function makeThreadEntry(
+  id: ThreadId,
+  projectId: ProjectId,
+  title: string,
+  overrides: Partial<OrchestrationReadModel["threads"][number]> = {},
+): OrchestrationReadModel["threads"][number] {
+  return {
+    id,
+    projectId,
+    origin: "user",
+    taskId: null,
+    title,
+    model: "gpt-5",
+    interactionMode: "default",
+    runtimeMode: "full-access",
+    branch: "main",
+    worktreePath: null,
+    isPinned: false,
+    latestTurn: null,
+    createdAt: NOW_ISO,
+    updatedAt: NOW_ISO,
+    deletedAt: null,
+    messages: [],
+    activities: [],
+    proposedPlans: [],
+    checkpoints: [],
+    session: null,
+    ...overrides,
   };
 }
 
@@ -349,7 +403,85 @@ function dispatchPointerDown(target: EventTarget | null): void {
   );
 }
 
-async function mountSidebarApp() {
+function projectOrderLabels(): string[] {
+  return [...document.querySelectorAll<HTMLElement>("[data-testid^='sidebar-project-']")].map(
+    (element) => element.getAttribute("aria-label") ?? "",
+  );
+}
+
+function visibleSidebarTriggerCount(label: "Collapse Sidebar" | "Expand Sidebar"): number {
+  return [
+    ...document.querySelectorAll<HTMLElement>(
+      `[data-slot='sidebar-trigger'][aria-label='${label}']`,
+    ),
+  ].filter((element) => {
+    const rect = element.getBoundingClientRect();
+    const style = window.getComputedStyle(element);
+    return (
+      style.display !== "none" &&
+      style.visibility !== "hidden" &&
+      rect.width > 0 &&
+      rect.height > 0 &&
+      rect.bottom > 0 &&
+      rect.right > 0 &&
+      rect.top < window.innerHeight &&
+      rect.left < window.innerWidth
+    );
+  }).length;
+}
+
+async function dragProjectRow(
+  sourceTestId: string,
+  targetTestId: string,
+  position: "before" | "after" = "before",
+): Promise<void> {
+  const source = document.querySelector<HTMLElement>(`[data-testid='${sourceTestId}']`);
+  const target = document.querySelector<HTMLElement>(`[data-testid='${targetTestId}']`);
+  expect(source).not.toBeNull();
+  expect(target).not.toBeNull();
+  if (!source || !target) {
+    return;
+  }
+
+  const dataTransfer = new DataTransfer();
+  source.dispatchEvent(
+    new DragEvent("dragstart", {
+      bubbles: true,
+      cancelable: true,
+      dataTransfer,
+    }),
+  );
+  await nextFrame();
+  const targetRect = target.getBoundingClientRect();
+  const clientY = position === "before" ? targetRect.top + 1 : targetRect.bottom - 1;
+  target.dispatchEvent(
+    new DragEvent("dragover", {
+      bubbles: true,
+      cancelable: true,
+      dataTransfer,
+      clientY,
+    }),
+  );
+  await nextFrame();
+  target.dispatchEvent(
+    new DragEvent("drop", {
+      bubbles: true,
+      cancelable: true,
+      dataTransfer,
+      clientY,
+    }),
+  );
+  source.dispatchEvent(
+    new DragEvent("dragend", {
+      bubbles: true,
+      cancelable: true,
+      dataTransfer,
+    }),
+  );
+  await nextFrame();
+}
+
+async function mountSidebarApp(initialEntries: string[] = ["/"]) {
   const host = document.createElement("div");
   host.style.position = "fixed";
   host.style.inset = "0";
@@ -361,7 +493,7 @@ async function mountSidebarApp() {
 
   const router = getRouter(
     createMemoryHistory({
-      initialEntries: ["/"],
+      initialEntries,
     }),
   );
 
@@ -470,6 +602,48 @@ describe("Sidebar browser", () => {
     await mounted.cleanup();
   });
 
+  it("renders the redesigned primary nav with Orchestrate", async () => {
+    const mounted = await mountSidebarApp();
+
+    await expect
+      .poll(() => {
+        const text = document.body.textContent ?? "";
+        return (
+          text.indexOf("New thread") < text.indexOf("Automations") &&
+          text.indexOf("Automations") < text.indexOf("Skills") &&
+          text.indexOf("Skills") < text.indexOf("Orchestrate")
+        );
+      })
+      .toBe(true);
+
+    await expect.element(page.getByRole("button", { name: "Orchestrate" })).toBeVisible();
+
+    await mounted.cleanup();
+  });
+
+  it("shows add-project and filter actions beside the Threads heading", async () => {
+    const mounted = await mountSidebarApp();
+
+    await expect.element(page.getByRole("button", { name: "Add project" })).toBeVisible();
+    await expect.element(page.getByRole("button", { name: "Filter threads" })).toBeVisible();
+
+    await mounted.cleanup();
+  });
+
+  it("shows only one desktop sidebar toggle at a time for the active thread shell", async () => {
+    const mounted = await mountSidebarApp([`/${THREAD_ID}`]);
+
+    await expect
+      .poll(() => visibleSidebarTriggerCount("Collapse Sidebar"))
+      .toBe(1);
+
+    await page.getByRole("button", { name: "Collapse Sidebar" }).click();
+
+    await expect.poll(() => visibleSidebarTriggerCount("Expand Sidebar")).toBe(1);
+
+    await mounted.cleanup();
+  });
+
   it("opens the settings popover with authenticated account data and rate limits", async () => {
     const mounted = await mountSidebarApp();
 
@@ -486,37 +660,67 @@ describe("Sidebar browser", () => {
     await mounted.cleanup();
   });
 
-  it("renders pinned threads before unpinned threads within the same project", async () => {
+  it("switches between grouped and chronological thread organization", async () => {
+    const projectAlpha = "project-alpha" as ProjectId;
+    const projectBeta = "project-beta" as ProjectId;
     fixture = {
       ...fixture,
       snapshot: {
         ...fixture.snapshot,
+        projects: [
+          makeProjectEntry(projectAlpha, "Alpha"),
+          makeProjectEntry(projectBeta, "Beta"),
+        ],
         threads: [
-          {
-            ...fixture.snapshot.threads[0]!,
-            id: "thread-unpinned" as ThreadId,
-            title: "Unpinned thread",
-            createdAt: "2026-03-04T12:02:00.000Z",
-            updatedAt: "2026-03-04T12:02:00.000Z",
-            isPinned: false,
-            session: null,
-            latestTurn: null,
-          },
-          {
-            ...fixture.snapshot.threads[0]!,
-            id: "thread-pinned" as ThreadId,
-            title: "Pinned thread",
-            createdAt: "2026-03-04T12:01:00.000Z",
-            updatedAt: "2026-03-04T12:01:00.000Z",
-            isPinned: true,
-            session: null,
-            latestTurn: null,
-          },
+          makeThreadEntry("thread-alpha" as ThreadId, projectAlpha, "Alpha thread"),
+          makeThreadEntry("thread-beta" as ThreadId, projectBeta, "Beta thread"),
         ],
       },
       welcome: {
         ...fixture.welcome,
-        bootstrapThreadId: "thread-pinned" as ThreadId,
+        bootstrapProjectId: projectAlpha,
+        bootstrapThreadId: "thread-alpha" as ThreadId,
+      },
+    };
+
+    const mounted = await mountSidebarApp();
+
+    await expect
+      .poll(() => document.querySelectorAll("[data-testid^='sidebar-project-']").length)
+      .toBe(2);
+
+    await page.getByRole("button", { name: "Filter threads" }).click();
+    await page.getByText("Chronological list", { exact: true }).click();
+
+    await expect
+      .poll(() => document.querySelectorAll("[data-testid^='sidebar-project-']").length)
+      .toBe(0);
+
+    await mounted.cleanup();
+  });
+
+  it("switches sort order between updated and created", async () => {
+    const projectAlpha = "project-alpha" as ProjectId;
+    fixture = {
+      ...fixture,
+      snapshot: {
+        ...fixture.snapshot,
+        projects: [makeProjectEntry(projectAlpha, "Alpha")],
+        threads: [
+          makeThreadEntry("thread-created-newest" as ThreadId, projectAlpha, "Created newest", {
+            createdAt: "2026-03-04T12:05:00.000Z",
+            updatedAt: "2026-03-04T12:01:00.000Z",
+          }),
+          makeThreadEntry("thread-updated-newest" as ThreadId, projectAlpha, "Updated newest", {
+            createdAt: "2026-03-04T12:01:00.000Z",
+            updatedAt: "2026-03-04T12:06:00.000Z",
+          }),
+        ],
+      },
+      welcome: {
+        ...fixture.welcome,
+        bootstrapProjectId: projectAlpha,
+        bootstrapThreadId: "thread-updated-newest" as ThreadId,
       },
     };
 
@@ -525,83 +729,146 @@ describe("Sidebar browser", () => {
     await expect
       .poll(() => {
         const sidebarText = document.body.textContent ?? "";
-        return sidebarText.indexOf("Pinned thread") < sidebarText.indexOf("Unpinned thread");
+        return (
+          sidebarText.indexOf("Updated newest") < sidebarText.indexOf("Created newest")
+        );
+      })
+      .toBe(true);
+
+    await page.getByRole("button", { name: "Filter threads" }).click();
+    await page.getByText("Created", { exact: true }).click();
+
+    await expect
+      .poll(() => {
+        const sidebarText = document.body.textContent ?? "";
+        return (
+          sidebarText.indexOf("Created newest") < sidebarText.indexOf("Updated newest")
+        );
       })
       .toBe(true);
 
     await mounted.cleanup();
   });
 
-  it("pins a thread through the browser fallback context menu and persists after remount", async () => {
+  it("filters to relevant threads and hides empty projects", async () => {
+    const projectAlpha = "project-alpha" as ProjectId;
+    const projectBeta = "project-beta" as ProjectId;
     fixture = {
       ...fixture,
       snapshot: {
         ...fixture.snapshot,
+        projects: [
+          makeProjectEntry(projectAlpha, "Alpha"),
+          makeProjectEntry(projectBeta, "Beta"),
+        ],
         threads: [
-          {
-            ...fixture.snapshot.threads[0]!,
-            id: "thread-newer" as ThreadId,
-            title: "Newer thread",
-            createdAt: "2026-03-04T12:02:00.000Z",
-            updatedAt: "2026-03-04T12:02:00.000Z",
-            isPinned: false,
-            session: null,
-            latestTurn: null,
-          },
-          {
-            ...fixture.snapshot.threads[0]!,
-            id: "thread-older" as ThreadId,
-            title: "Older thread",
-            createdAt: "2026-03-04T12:01:00.000Z",
-            updatedAt: "2026-03-04T12:01:00.000Z",
-            isPinned: false,
-            session: null,
-            latestTurn: null,
-          },
+          makeThreadEntry("thread-stale" as ThreadId, projectAlpha, "Stale thread", {
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          }),
+          makeThreadEntry("thread-relevant" as ThreadId, projectBeta, "Relevant thread", {
+            isPinned: true,
+            createdAt: "2026-03-04T12:05:00.000Z",
+            updatedAt: "2026-03-04T12:05:00.000Z",
+          }),
         ],
       },
       welcome: {
         ...fixture.welcome,
-        bootstrapThreadId: "thread-newer" as ThreadId,
+        bootstrapProjectId: projectBeta,
+        bootstrapThreadId: "thread-relevant" as ThreadId,
       },
     };
 
     const mounted = await mountSidebarApp();
 
-    await expect
-      .poll(() => {
-        const sidebarText = document.body.textContent ?? "";
-        return sidebarText.indexOf("Newer thread") < sidebarText.indexOf("Older thread");
-      })
-      .toBe(true);
-
-    await page.getByRole("button", { name: /Older thread/ }).click({ button: "right" });
-    await expect.element(page.getByRole("button", { name: "Pin thread" })).toBeVisible();
-    await page.getByRole("button", { name: "Pin thread" }).click();
+    await page.getByRole("button", { name: "Filter threads" }).click();
+    await page.getByText("Relevant", { exact: true }).click();
 
     await expect
-      .poll(() => {
-        const sidebarText = document.body.textContent ?? "";
-        return sidebarText.indexOf("Older thread") < sidebarText.indexOf("Newer thread");
-      })
+      .poll(() => projectOrderLabels())
+      .toEqual(["Beta"]);
+    await expect
+      .poll(() => document.body.textContent?.includes("Relevant thread") ?? false)
       .toBe(true);
-
-    await page.getByRole("button", { name: /Older thread/ }).click({ button: "right" });
-    await expect.element(page.getByRole("button", { name: "Unpin thread" })).toBeVisible();
+    await expect
+      .poll(() => document.body.textContent?.includes("Alpha") ?? false)
+      .toBe(false);
 
     await mounted.cleanup();
+  });
+
+  it("reorders projects via drag and drop and persists after remount", async () => {
+    const projectAlpha = "project-alpha" as ProjectId;
+    const projectBeta = "project-beta" as ProjectId;
+    const projectGamma = "project-gamma" as ProjectId;
+    fixture = {
+      ...fixture,
+      snapshot: {
+        ...fixture.snapshot,
+        projects: [
+          makeProjectEntry(projectAlpha, "Alpha"),
+          makeProjectEntry(projectBeta, "Beta"),
+          makeProjectEntry(projectGamma, "Gamma"),
+        ],
+        threads: [],
+      },
+      welcome: {
+        cwd: "C:\\Users\\Addis\\source\\repos\\t3code-main",
+        projectName: "t3code-main",
+      } as WsWelcomePayload,
+    };
+
+    const mounted = await mountSidebarApp();
+
+    await expect.poll(() => projectOrderLabels()).toEqual(["Alpha", "Beta", "Gamma"]);
+
+    await dragProjectRow("sidebar-project-project-gamma", "sidebar-project-project-alpha");
+
+    await expect.poll(() => projectOrderLabels()).toEqual(["Gamma", "Alpha", "Beta"]);
+
+    await mounted.cleanup();
+    useStore.setState({
+      projects: [],
+      threads: [],
+      threadsHydrated: false,
+    });
 
     const remounted = await mountSidebarApp();
+    await expect.poll(() => projectOrderLabels()).toEqual(["Gamma", "Alpha", "Beta"]);
+    await remounted.cleanup();
+  });
+
+  it("uses the first visible project when New thread is clicked without an active thread", async () => {
+    const projectAlpha = "project-alpha" as ProjectId;
+    const projectBeta = "project-beta" as ProjectId;
+    fixture = {
+      ...fixture,
+      snapshot: {
+        ...fixture.snapshot,
+        projects: [
+          makeProjectEntry(projectAlpha, "Alpha"),
+          makeProjectEntry(projectBeta, "Beta"),
+        ],
+        threads: [],
+      },
+      welcome: {
+        cwd: "C:\\Users\\Addis\\source\\repos\\t3code-main",
+        projectName: "t3code-main",
+      } as WsWelcomePayload,
+    };
+
+    const mounted = await mountSidebarApp();
+
+    await page.getByRole("button", { name: "New thread" }).click();
+
     await expect
       .poll(() => {
-        const sidebarText = document.body.textContent ?? "";
-        return sidebarText.indexOf("Older thread") < sidebarText.indexOf("Newer thread");
+        const draftMap = useComposerDraftStore.getState().projectDraftThreadIdByProjectId;
+        return draftMap[projectAlpha] ?? null;
       })
-      .toBe(true);
+      .not.toBeNull();
 
-    await page.getByRole("button", { name: /Older thread/ }).click({ button: "right" });
-    await expect.element(page.getByRole("button", { name: "Unpin thread" })).toBeVisible();
-
-    await remounted.cleanup();
+    await mounted.cleanup();
   });
 });

@@ -217,10 +217,15 @@ function createSnapshotForTargetUser(options: {
         deletedAt: null,
       },
     ],
+    tasks: [],
+    taskRuntimes: [],
+    projectRules: [],
     threads: [
       {
         id: THREAD_ID,
         projectId: PROJECT_ID,
+        origin: "user",
+        taskId: null,
         title: "Browser test thread",
         model: "gpt-5",
         interactionMode: "default",
@@ -290,10 +295,15 @@ function createSelectionFeatureSnapshot(): OrchestrationReadModel {
         deletedAt: null,
       },
     ],
+    tasks: [],
+    taskRuntimes: [],
+    projectRules: [],
     threads: [
       {
         id: THREAD_ID,
         projectId: PROJECT_ID,
+        origin: "user",
+        taskId: null,
         title: "Selection feature thread",
         model: "gpt-5",
         interactionMode: "default",
@@ -363,10 +373,15 @@ function createActivePlanRegressionSnapshot(options: {
         deletedAt: null,
       },
     ],
+    tasks: [],
+    taskRuntimes: [],
+    projectRules: [],
     threads: [
       {
         id: THREAD_ID,
         projectId: PROJECT_ID,
+        origin: "user",
+        taskId: null,
         title: "Plan regression thread",
         model: "gpt-5",
         interactionMode: options.latestTurnInteractionMode,

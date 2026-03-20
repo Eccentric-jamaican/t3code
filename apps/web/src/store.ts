@@ -13,12 +13,15 @@ import {
   resolveModelSlugForProvider,
 } from "@t3tools/shared/model";
 import { create } from "zustand";
-import { type ChatMessage, type Project, type Thread } from "./types";
+import { type ChatMessage, type Project, type ProjectRules, type Task, type TaskRuntime, type Thread } from "./types";
 
 // ── State ────────────────────────────────────────────────────────────
 
 export interface AppState {
   projects: Project[];
+  projectRules: ProjectRules[];
+  tasks: Task[];
+  taskRuntimes: TaskRuntime[];
   threads: Thread[];
   threadsHydrated: boolean;
 }
@@ -37,6 +40,9 @@ const LEGACY_PERSISTED_STATE_KEYS = [
 
 const initialState: AppState = {
   projects: [],
+  projectRules: [],
+  tasks: [],
+  taskRuntimes: [],
   threads: [],
   threadsHydrated: false,
 };
@@ -205,6 +211,30 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
     state.projects,
   );
   const existingThreadById = new Map(state.threads.map((thread) => [thread.id, thread] as const));
+  const projectRules = readModel.projectRules.map((entry) => ({ ...entry }));
+  const tasks = readModel.tasks
+    .filter((task) => task.deletedAt === null)
+    .map((task) => ({
+      id: task.id,
+      projectId: task.projectId,
+      title: task.title,
+      brief: task.brief,
+      acceptanceCriteria: task.acceptanceCriteria,
+      attachments: (task.attachments ?? []).map((attachment) => ({
+        type: "image" as const,
+        id: attachment.id,
+        name: attachment.name,
+        mimeType: attachment.mimeType,
+        sizeBytes: attachment.sizeBytes,
+        previewUrl: toAttachmentPreviewUrl(attachmentPreviewRoutePath(attachment.id)),
+      })),
+      state: task.state,
+      priority: task.priority,
+      threadId: task.threadId,
+      createdAt: task.createdAt,
+      updatedAt: task.updatedAt,
+    }));
+  const taskRuntimes = readModel.taskRuntimes.map((runtime) => ({ ...runtime }));
   const threads = readModel.threads
     .filter((thread) => thread.deletedAt === null)
     .map((thread) => {
@@ -213,6 +243,8 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
         id: thread.id,
         codexThreadId: null,
         projectId: thread.projectId,
+        origin: thread.origin ?? "user",
+        taskId: thread.taskId ?? null,
         title: thread.title,
         model: resolveModelSlugForProvider(
           inferProviderForThreadModel({
@@ -283,6 +315,9 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
   return {
     ...state,
     projects,
+    projectRules,
+    tasks,
+    taskRuntimes,
     threads,
     threadsHydrated: true,
   };

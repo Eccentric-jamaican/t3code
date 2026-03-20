@@ -51,3 +51,7 @@ Docs:
 - Codex-Monitor (Tauri, feature-complete, strong reference implementation): https://github.com/Dimillian/CodexMonitor
 
 Use these as implementation references when designing protocol handling, UX flows, and operational safeguards.
+
+## Local Skills
+
+- `t3-dev-ui-start`: Repo-local startup guide for bringing up the web UI and websocket backend together for local browser or Chrome MCP testing. File: `C:/Users/Addis/source/repos/t3code-main/.agents/skills/t3-dev-ui-start/SKILL.md`

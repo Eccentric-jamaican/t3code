@@ -45,10 +45,15 @@ const readModel: OrchestrationReadModel = {
       deletedAt: null,
     },
   ],
+  tasks: [],
+  taskRuntimes: [],
+  projectRules: [],
   threads: [
     {
       id: ThreadId.makeUnsafe("thread-1"),
       projectId: ProjectId.makeUnsafe("project-a"),
+      origin: "user",
+      taskId: null,
       title: "Thread A",
       model: "gpt-5-codex",
       interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -69,6 +74,8 @@ const readModel: OrchestrationReadModel = {
     {
       id: ThreadId.makeUnsafe("thread-2"),
       projectId: ProjectId.makeUnsafe("project-b"),
+      origin: "user",
+      taskId: null,
       title: "Thread B",
       model: "gpt-5-codex",
       interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,

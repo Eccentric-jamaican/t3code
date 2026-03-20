@@ -4,6 +4,9 @@
 # Development (with hot reload)
 bun run dev
 
+# Development for Chrome MCP / manual browser testing without auto-open
+bun run dev -- --no-browser
+
 # Desktop development
 bun run dev:desktop
 
@@ -20,3 +23,5 @@ bun run dist:desktop:dmg
 # Or from any project directory after publishing:
 npx t3
 ```
+
+For isolated browser testing, see `.docs/scripts.md`.

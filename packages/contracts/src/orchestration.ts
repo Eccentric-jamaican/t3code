@@ -10,6 +10,7 @@ import {
   NonNegativeInt,
   ProjectId,
   ProviderItemId,
+  TaskId,
   ThreadId,
   TrimmedNonEmptyString,
   TurnId,
@@ -136,6 +137,66 @@ export const OrchestrationProject = Schema.Struct({
 });
 export type OrchestrationProject = typeof OrchestrationProject.Type;
 
+export const OrchestrationTaskState = Schema.Literals([
+  "backlog",
+  "ready",
+  "running",
+  "review",
+  "blocked",
+  "done",
+]);
+export type OrchestrationTaskState = typeof OrchestrationTaskState.Type;
+
+export const OrchestrationTaskRuntimeStatus = Schema.Literals([
+  "idle",
+  "queued",
+  "starting",
+  "running",
+  "awaiting_approval",
+  "awaiting_input",
+  "retrying",
+  "error",
+  "stopped",
+]);
+export type OrchestrationTaskRuntimeStatus = typeof OrchestrationTaskRuntimeStatus.Type;
+
+export const OrchestrationTask = Schema.Struct({
+  id: TaskId,
+  projectId: ProjectId,
+  title: TrimmedNonEmptyString,
+  brief: Schema.String,
+  acceptanceCriteria: Schema.String,
+  attachments: Schema.optional(Schema.Array(ChatAttachment)),
+  state: OrchestrationTaskState,
+  priority: Schema.NullOr(NonNegativeInt),
+  threadId: Schema.NullOr(ThreadId),
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+  deletedAt: Schema.NullOr(IsoDateTime),
+});
+export type OrchestrationTask = typeof OrchestrationTask.Type;
+
+export const OrchestrationTaskRuntime = Schema.Struct({
+  taskId: TaskId,
+  status: OrchestrationTaskRuntimeStatus,
+  activeTurnId: Schema.NullOr(TurnId),
+  lastError: Schema.NullOr(TrimmedNonEmptyString),
+  lastActivityAt: Schema.NullOr(IsoDateTime),
+  updatedAt: IsoDateTime,
+});
+export type OrchestrationTaskRuntime = typeof OrchestrationTaskRuntime.Type;
+
+export const OrchestrationProjectRules = Schema.Struct({
+  projectId: ProjectId,
+  promptTemplate: Schema.String,
+  defaultModel: Schema.NullOr(TrimmedNonEmptyString),
+  defaultRuntimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(() => DEFAULT_RUNTIME_MODE)),
+  onSuccessMoveTo: OrchestrationTaskState,
+  onFailureMoveTo: OrchestrationTaskState,
+  updatedAt: IsoDateTime,
+});
+export type OrchestrationProjectRules = typeof OrchestrationProjectRules.Type;
+
 export const OrchestrationMessageRole = Schema.Literals(["user", "assistant", "system"]);
 export type OrchestrationMessageRole = typeof OrchestrationMessageRole.Type;
 
@@ -251,6 +312,8 @@ export type OrchestrationLatestTurn = typeof OrchestrationLatestTurn.Type;
 export const OrchestrationThread = Schema.Struct({
   id: ThreadId,
   projectId: ProjectId,
+  origin: Schema.Literals(["user", "task"]).pipe(Schema.withDecodingDefault(() => "user")),
+  taskId: Schema.NullOr(TaskId).pipe(Schema.withDecodingDefault(() => null)),
   title: TrimmedNonEmptyString,
   model: TrimmedNonEmptyString,
   runtimeMode: RuntimeMode,
@@ -277,6 +340,13 @@ export type OrchestrationThread = typeof OrchestrationThread.Type;
 export const OrchestrationReadModel = Schema.Struct({
   snapshotSequence: NonNegativeInt,
   projects: Schema.Array(OrchestrationProject),
+  tasks: Schema.Array(OrchestrationTask).pipe(Schema.withDecodingDefault(() => [])),
+  taskRuntimes: Schema.Array(OrchestrationTaskRuntime).pipe(
+    Schema.withDecodingDefault(() => []),
+  ),
+  projectRules: Schema.Array(OrchestrationProjectRules).pipe(
+    Schema.withDecodingDefault(() => []),
+  ),
   threads: Schema.Array(OrchestrationThread),
   updatedAt: IsoDateTime,
 });
@@ -308,11 +378,117 @@ const ProjectDeleteCommand = Schema.Struct({
   projectId: ProjectId,
 });
 
+const ProjectOrchestrationRulesUpdateCommand = Schema.Struct({
+  type: Schema.Literal("project.orchestration-rules.update"),
+  commandId: CommandId,
+  projectId: ProjectId,
+  promptTemplate: Schema.optional(Schema.String),
+  defaultModel: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  defaultRuntimeMode: Schema.optional(RuntimeMode),
+  onSuccessMoveTo: Schema.optional(OrchestrationTaskState),
+  onFailureMoveTo: Schema.optional(OrchestrationTaskState),
+  createdAt: IsoDateTime,
+});
+
+const TaskCreateCommand = Schema.Struct({
+  type: Schema.Literal("task.create"),
+  commandId: CommandId,
+  taskId: TaskId,
+  projectId: ProjectId,
+  title: TrimmedNonEmptyString,
+  brief: Schema.String,
+  acceptanceCriteria: Schema.optional(Schema.String),
+  attachments: Schema.optional(Schema.Array(ChatAttachment)),
+  state: Schema.optional(OrchestrationTaskState),
+  priority: Schema.optional(Schema.NullOr(NonNegativeInt)),
+  createdAt: IsoDateTime,
+});
+
+const TaskMetaUpdateCommand = Schema.Struct({
+  type: Schema.Literal("task.meta.update"),
+  commandId: CommandId,
+  taskId: TaskId,
+  title: Schema.optional(TrimmedNonEmptyString),
+  brief: Schema.optional(Schema.String),
+  acceptanceCriteria: Schema.optional(Schema.String),
+  attachments: Schema.optional(Schema.Array(ChatAttachment)),
+  priority: Schema.optional(Schema.NullOr(NonNegativeInt)),
+  threadId: Schema.optional(Schema.NullOr(ThreadId)),
+  updatedAt: Schema.optional(IsoDateTime),
+});
+
+const ClientTaskAttachment = Schema.Union([ChatAttachment, UploadChatAttachment]);
+
+const ClientTaskCreateCommand = Schema.Struct({
+  type: Schema.Literal("task.create"),
+  commandId: CommandId,
+  taskId: TaskId,
+  projectId: ProjectId,
+  title: TrimmedNonEmptyString,
+  brief: Schema.String,
+  acceptanceCriteria: Schema.optional(Schema.String),
+  attachments: Schema.optional(Schema.Array(ClientTaskAttachment)),
+  state: Schema.optional(OrchestrationTaskState),
+  priority: Schema.optional(Schema.NullOr(NonNegativeInt)),
+  createdAt: IsoDateTime,
+});
+
+const ClientTaskMetaUpdateCommand = Schema.Struct({
+  type: Schema.Literal("task.meta.update"),
+  commandId: CommandId,
+  taskId: TaskId,
+  title: Schema.optional(TrimmedNonEmptyString),
+  brief: Schema.optional(Schema.String),
+  acceptanceCriteria: Schema.optional(Schema.String),
+  attachments: Schema.optional(Schema.Array(ClientTaskAttachment)),
+  priority: Schema.optional(Schema.NullOr(NonNegativeInt)),
+  threadId: Schema.optional(Schema.NullOr(ThreadId)),
+  updatedAt: Schema.optional(IsoDateTime),
+});
+
+const TaskStateSetCommand = Schema.Struct({
+  type: Schema.Literal("task.state.set"),
+  commandId: CommandId,
+  taskId: TaskId,
+  state: OrchestrationTaskState,
+  createdAt: IsoDateTime,
+});
+
+const TaskDeleteCommand = Schema.Struct({
+  type: Schema.Literal("task.delete"),
+  commandId: CommandId,
+  taskId: TaskId,
+  createdAt: IsoDateTime,
+});
+
+const TaskRunStartCommand = Schema.Struct({
+  type: Schema.Literal("task.run.start"),
+  commandId: CommandId,
+  taskId: TaskId,
+  createdAt: IsoDateTime,
+});
+
+const TaskRunStopCommand = Schema.Struct({
+  type: Schema.Literal("task.run.stop"),
+  commandId: CommandId,
+  taskId: TaskId,
+  createdAt: IsoDateTime,
+});
+
+const TaskRunRetryCommand = Schema.Struct({
+  type: Schema.Literal("task.run.retry"),
+  commandId: CommandId,
+  taskId: TaskId,
+  createdAt: IsoDateTime,
+});
+
 const ThreadCreateCommand = Schema.Struct({
   type: Schema.Literal("thread.create"),
   commandId: CommandId,
   threadId: ThreadId,
   projectId: ProjectId,
+  origin: Schema.optional(Schema.Literals(["user", "task"])),
+  taskId: Schema.optional(Schema.NullOr(TaskId)),
   title: TrimmedNonEmptyString,
   model: TrimmedNonEmptyString,
   runtimeMode: RuntimeMode,
@@ -445,6 +621,14 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ProjectCreateCommand,
   ProjectMetaUpdateCommand,
   ProjectDeleteCommand,
+  ProjectOrchestrationRulesUpdateCommand,
+  TaskCreateCommand,
+  TaskMetaUpdateCommand,
+  TaskStateSetCommand,
+  TaskDeleteCommand,
+  TaskRunStartCommand,
+  TaskRunStopCommand,
+  TaskRunRetryCommand,
   ThreadCreateCommand,
   ThreadDeleteCommand,
   ThreadMetaUpdateCommand,
@@ -464,6 +648,14 @@ export const ClientOrchestrationCommand = Schema.Union([
   ProjectCreateCommand,
   ProjectMetaUpdateCommand,
   ProjectDeleteCommand,
+  ProjectOrchestrationRulesUpdateCommand,
+  ClientTaskCreateCommand,
+  ClientTaskMetaUpdateCommand,
+  TaskStateSetCommand,
+  TaskDeleteCommand,
+  TaskRunStartCommand,
+  TaskRunStopCommand,
+  TaskRunRetryCommand,
   ThreadCreateCommand,
   ThreadDeleteCommand,
   ThreadMetaUpdateCommand,
@@ -564,6 +756,14 @@ export const OrchestrationEventType = Schema.Literals([
   "project.created",
   "project.meta-updated",
   "project.deleted",
+  "project.orchestration-rules-updated",
+  "task.created",
+  "task.meta-updated",
+  "task.state-set",
+  "task.deleted",
+  "task.run-start-requested",
+  "task.run-stop-requested",
+  "task.run-retry-requested",
   "thread.created",
   "thread.deleted",
   "thread.meta-updated",
@@ -584,7 +784,7 @@ export const OrchestrationEventType = Schema.Literals([
 ]);
 export type OrchestrationEventType = typeof OrchestrationEventType.Type;
 
-export const OrchestrationAggregateKind = Schema.Literals(["project", "thread"]);
+export const OrchestrationAggregateKind = Schema.Literals(["project", "task", "thread"]);
 export type OrchestrationAggregateKind = typeof OrchestrationAggregateKind.Type;
 export const OrchestrationActorKind = Schema.Literals(["client", "server", "provider"]);
 
@@ -612,9 +812,75 @@ export const ProjectDeletedPayload = Schema.Struct({
   deletedAt: IsoDateTime,
 });
 
+export const ProjectOrchestrationRulesUpdatedPayload = Schema.Struct({
+  projectId: ProjectId,
+  promptTemplate: Schema.String,
+  defaultModel: Schema.NullOr(TrimmedNonEmptyString),
+  defaultRuntimeMode: RuntimeMode,
+  onSuccessMoveTo: OrchestrationTaskState,
+  onFailureMoveTo: OrchestrationTaskState,
+  updatedAt: IsoDateTime,
+});
+
+export const TaskCreatedPayload = Schema.Struct({
+  taskId: TaskId,
+  projectId: ProjectId,
+  title: TrimmedNonEmptyString,
+  brief: Schema.String,
+  acceptanceCriteria: Schema.String,
+  attachments: Schema.optional(Schema.Array(ChatAttachment)),
+  state: OrchestrationTaskState,
+  priority: Schema.NullOr(NonNegativeInt),
+  threadId: Schema.NullOr(ThreadId),
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+});
+
+export const TaskMetaUpdatedPayload = Schema.Struct({
+  taskId: TaskId,
+  title: Schema.optional(TrimmedNonEmptyString),
+  brief: Schema.optional(Schema.String),
+  acceptanceCriteria: Schema.optional(Schema.String),
+  attachments: Schema.optional(Schema.Array(ChatAttachment)),
+  priority: Schema.optional(Schema.NullOr(NonNegativeInt)),
+  threadId: Schema.optional(Schema.NullOr(ThreadId)),
+  updatedAt: IsoDateTime,
+});
+
+export const TaskStateSetPayload = Schema.Struct({
+  taskId: TaskId,
+  state: OrchestrationTaskState,
+  updatedAt: IsoDateTime,
+});
+
+export const TaskDeletedPayload = Schema.Struct({
+  taskId: TaskId,
+  deletedAt: IsoDateTime,
+});
+
+export const TaskRunStartRequestedPayload = Schema.Struct({
+  taskId: TaskId,
+  threadId: Schema.NullOr(ThreadId),
+  createdAt: IsoDateTime,
+});
+
+export const TaskRunStopRequestedPayload = Schema.Struct({
+  taskId: TaskId,
+  threadId: Schema.NullOr(ThreadId),
+  createdAt: IsoDateTime,
+});
+
+export const TaskRunRetryRequestedPayload = Schema.Struct({
+  taskId: TaskId,
+  threadId: Schema.NullOr(ThreadId),
+  createdAt: IsoDateTime,
+});
+
 export const ThreadCreatedPayload = Schema.Struct({
   threadId: ThreadId,
   projectId: ProjectId,
+  origin: Schema.Literals(["user", "task"]).pipe(Schema.withDecodingDefault(() => "user")),
+  taskId: Schema.NullOr(TaskId).pipe(Schema.withDecodingDefault(() => null)),
   title: TrimmedNonEmptyString,
   model: TrimmedNonEmptyString,
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(() => DEFAULT_RUNTIME_MODE)),
@@ -759,7 +1025,7 @@ const EventBaseFields = {
   sequence: NonNegativeInt,
   eventId: EventId,
   aggregateKind: OrchestrationAggregateKind,
-  aggregateId: Schema.Union([ProjectId, ThreadId]),
+  aggregateId: Schema.Union([ProjectId, TaskId, ThreadId]),
   occurredAt: IsoDateTime,
   commandId: Schema.NullOr(CommandId),
   causationEventId: Schema.NullOr(EventId),
@@ -771,7 +1037,7 @@ const PersistedEventBaseFields = {
   sequence: NonNegativeInt,
   eventId: EventId,
   aggregateKind: OrchestrationAggregateKind,
-  streamId: Schema.Union([ProjectId, ThreadId]),
+  streamId: Schema.Union([ProjectId, TaskId, ThreadId]),
   streamVersion: NonNegativeInt,
   occurredAt: IsoDateTime,
   commandId: Schema.NullOr(CommandId),
@@ -796,6 +1062,46 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("project.deleted"),
     payload: ProjectDeletedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("project.orchestration-rules-updated"),
+    payload: ProjectOrchestrationRulesUpdatedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("task.created"),
+    payload: TaskCreatedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("task.meta-updated"),
+    payload: TaskMetaUpdatedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("task.state-set"),
+    payload: TaskStateSetPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("task.deleted"),
+    payload: TaskDeletedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("task.run-start-requested"),
+    payload: TaskRunStartRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("task.run-stop-requested"),
+    payload: TaskRunStopRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("task.run-retry-requested"),
+    payload: TaskRunRetryRequestedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
@@ -900,6 +1206,46 @@ export const OrchestrationPersistedEvent = Schema.Union([
     ...PersistedEventBaseFields,
     eventType: Schema.Literal("project.deleted"),
     payload: ProjectDeletedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("project.orchestration-rules-updated"),
+    payload: ProjectOrchestrationRulesUpdatedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("task.created"),
+    payload: TaskCreatedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("task.meta-updated"),
+    payload: TaskMetaUpdatedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("task.state-set"),
+    payload: TaskStateSetPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("task.deleted"),
+    payload: TaskDeletedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("task.run-start-requested"),
+    payload: TaskRunStartRequestedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("task.run-stop-requested"),
+    payload: TaskRunStopRequestedPayload,
+  }),
+  Schema.Struct({
+    ...PersistedEventBaseFields,
+    eventType: Schema.Literal("task.run-retry-requested"),
+    payload: TaskRunRetryRequestedPayload,
   }),
   Schema.Struct({
     ...PersistedEventBaseFields,

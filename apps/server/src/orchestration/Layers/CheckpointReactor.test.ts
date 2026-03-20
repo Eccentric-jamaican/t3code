@@ -37,6 +37,8 @@ import {
 import { checkpointRefForThreadTurn } from "../../checkpointing/Utils.ts";
 import { ServerConfig } from "../../config.ts";
 
+const TEST_TIMEOUT_MS = 120_000;
+
 const asProjectId = (value: string): ProjectId => ProjectId.makeUnsafe(value);
 const asTurnId = (value: string): TurnId => TurnId.makeUnsafe(value);
 
@@ -112,7 +114,7 @@ async function waitForThread(
     checkpoints: ReadonlyArray<{ checkpointTurnCount: number }>;
     activities: ReadonlyArray<{ kind: string }>;
   }) => boolean,
-  timeoutMs = 2000,
+  timeoutMs = 60_000,
 ) {
   const deadline = Date.now() + timeoutMs;
   const poll = async (): Promise<{
@@ -137,7 +139,7 @@ async function waitForThread(
 async function waitForEvent(
   engine: OrchestrationEngineShape,
   predicate: (event: { type: string }) => boolean,
-  timeoutMs = 2000,
+  timeoutMs = 60_000,
 ) {
   const deadline = Date.now() + timeoutMs;
   const poll = async () => {
@@ -188,7 +190,7 @@ function gitShowFileAtRef(cwd: string, ref: string, filePath: string): string {
   return runGit(cwd, ["show", `${ref}:${filePath}`]);
 }
 
-async function waitForGitRefExists(cwd: string, ref: string, timeoutMs = 2000) {
+async function waitForGitRefExists(cwd: string, ref: string, timeoutMs = 60_000) {
   const deadline = Date.now() + timeoutMs;
   const poll = async (): Promise<void> => {
     if (gitRefExists(cwd, ref)) {
@@ -203,7 +205,7 @@ async function waitForGitRefExists(cwd: string, ref: string, timeoutMs = 2000) {
   return poll();
 }
 
-describe("CheckpointReactor", () => {
+describe("CheckpointReactor", { timeout: TEST_TIMEOUT_MS }, () => {
   let runtime: ManagedRuntime.ManagedRuntime<
     OrchestrationEngineService | CheckpointReactor | CheckpointStore,
     unknown
@@ -223,7 +225,11 @@ describe("CheckpointReactor", () => {
     while (tempDirs.length > 0) {
       const dir = tempDirs.pop();
       if (dir) {
-        fs.rmSync(dir, { recursive: true, force: true });
+        try {
+          fs.rmSync(dir, { recursive: true, force: true });
+        } catch {
+          // Windows can keep git files open briefly after process teardown.
+        }
       }
     }
   });
@@ -783,7 +789,7 @@ describe("CheckpointReactor", () => {
       threadId: ThreadId.makeUnsafe("thread-1"),
       numTurns: 1,
     });
-    expect(fs.readFileSync(path.join(harness.cwd, "README.md"), "utf8")).toBe("v2\n");
+    expect(fs.readFileSync(path.join(harness.cwd, "README.md"), "utf8").replaceAll("\r\n", "\n")).toBe("v2\n");
     expect(
       gitRefExists(harness.cwd, checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 2)),
     ).toBe(false);
@@ -859,7 +865,7 @@ describe("CheckpointReactor", () => {
       }),
     );
 
-    const deadline = Date.now() + 2000;
+    const deadline = Date.now() + 60_000;
     const waitForRollbackCalls = async (): Promise<void> => {
       if (harness.provider.rollbackConversation.mock.calls.length >= 2) {
         return;

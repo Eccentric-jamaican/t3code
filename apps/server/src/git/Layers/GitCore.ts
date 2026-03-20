@@ -382,7 +382,7 @@ const makeGitCore = Effect.gen(function* () {
     Effect.gen(function* () {
       const upstream = yield* resolveCurrentUpstream(cwd);
       if (!upstream) return;
-      yield* fetchUpstreamRef(cwd, upstream);
+      yield* fetchUpstreamRefForStatus(cwd, upstream);
     });
 
   const resolveDefaultBranchName = (cwd: string): Effect.Effect<string | null, GitCommandError> =>
@@ -1160,10 +1160,7 @@ const makeGitCore = Effect.gen(function* () {
         fallbackErrorMessage: "git checkout failed",
       });
 
-      // Refresh upstream refs in the background so checkout remains responsive.
-      yield* Effect.forkScoped(
-        refreshCheckedOutBranchUpstream(input.cwd).pipe(Effect.catch(() => Effect.void)),
-      );
+      yield* refreshCheckedOutBranchUpstream(input.cwd).pipe(Effect.catch(() => Effect.void));
     });
 
   const initRepo: GitCoreShape["initRepo"] = (input) =>

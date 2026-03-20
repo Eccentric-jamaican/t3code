@@ -11,7 +11,9 @@ import { toPersistenceSqlError, type ProjectionRepositoryError } from "../../per
 import { OrchestrationEventStore } from "../../persistence/Services/OrchestrationEventStore.ts";
 import { ProjectionPendingApprovalRepository } from "../../persistence/Services/ProjectionPendingApprovals.ts";
 import { ProjectionProjectRepository } from "../../persistence/Services/ProjectionProjects.ts";
+import { ProjectionProjectRulesRepository } from "../../persistence/Services/ProjectionProjectRules.ts";
 import { ProjectionStateRepository } from "../../persistence/Services/ProjectionState.ts";
+import { ProjectionTaskRepository } from "../../persistence/Services/ProjectionTasks.ts";
 import { ProjectionThreadActivityRepository } from "../../persistence/Services/ProjectionThreadActivities.ts";
 import { type ProjectionThreadActivity } from "../../persistence/Services/ProjectionThreadActivities.ts";
 import {
@@ -30,7 +32,9 @@ import {
 import { ProjectionThreadRepository } from "../../persistence/Services/ProjectionThreads.ts";
 import { ProjectionPendingApprovalRepositoryLive } from "../../persistence/Layers/ProjectionPendingApprovals.ts";
 import { ProjectionProjectRepositoryLive } from "../../persistence/Layers/ProjectionProjects.ts";
+import { ProjectionProjectRulesRepositoryLive } from "../../persistence/Layers/ProjectionProjectRules.ts";
 import { ProjectionStateRepositoryLive } from "../../persistence/Layers/ProjectionState.ts";
+import { ProjectionTaskRepositoryLive } from "../../persistence/Layers/ProjectionTasks.ts";
 import { ProjectionThreadActivityRepositoryLive } from "../../persistence/Layers/ProjectionThreadActivities.ts";
 import { ProjectionThreadMessageRepositoryLive } from "../../persistence/Layers/ProjectionThreadMessages.ts";
 import { ProjectionThreadProposedPlanRepositoryLive } from "../../persistence/Layers/ProjectionThreadProposedPlans.ts";
@@ -51,6 +55,8 @@ import {
 
 export const ORCHESTRATION_PROJECTOR_NAMES = {
   projects: "projection.projects",
+  projectRules: "projection.project-rules",
+  tasks: "projection.tasks",
   threads: "projection.threads",
   threadMessages: "projection.thread-messages",
   threadProposedPlans: "projection.thread-proposed-plans",
@@ -344,6 +350,8 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
   const eventStore = yield* OrchestrationEventStore;
   const projectionStateRepository = yield* ProjectionStateRepository;
   const projectionProjectRepository = yield* ProjectionProjectRepository;
+  const projectionProjectRulesRepository = yield* ProjectionProjectRulesRepository;
+  const projectionTaskRepository = yield* ProjectionTaskRepository;
   const projectionThreadRepository = yield* ProjectionThreadRepository;
   const projectionThreadMessageRepository = yield* ProjectionThreadMessageRepository;
   const projectionThreadProposedPlanRepository = yield* ProjectionThreadProposedPlanRepository;
@@ -414,6 +422,105 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
       }
     });
 
+  const applyProjectRulesProjection: ProjectorDefinition["apply"] = (event) =>
+    Effect.gen(function* () {
+      switch (event.type) {
+        case "project.orchestration-rules-updated":
+          yield* projectionProjectRulesRepository.upsert({
+            projectId: event.payload.projectId,
+            promptTemplate: event.payload.promptTemplate,
+            defaultModel: event.payload.defaultModel,
+            defaultRuntimeMode: event.payload.defaultRuntimeMode,
+            onSuccessMoveTo: event.payload.onSuccessMoveTo,
+            onFailureMoveTo: event.payload.onFailureMoveTo,
+            updatedAt: event.payload.updatedAt,
+          });
+          return;
+
+        default:
+          return;
+      }
+    });
+
+  const applyTasksProjection: ProjectorDefinition["apply"] = (event) =>
+    Effect.gen(function* () {
+      switch (event.type) {
+        case "task.created":
+          yield* projectionTaskRepository.upsert({
+            taskId: event.payload.taskId,
+            projectId: event.payload.projectId,
+            title: event.payload.title,
+            brief: event.payload.brief,
+            acceptanceCriteria: event.payload.acceptanceCriteria,
+            attachments: event.payload.attachments ?? [],
+            state: event.payload.state,
+            priority: event.payload.priority,
+            threadId: event.payload.threadId,
+            createdAt: event.payload.createdAt,
+            updatedAt: event.payload.updatedAt,
+            deletedAt: null,
+          });
+          return;
+
+        case "task.meta-updated": {
+          const existingRow = yield* projectionTaskRepository.getById({
+            taskId: event.payload.taskId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionTaskRepository.upsert({
+            ...existingRow.value,
+            ...(event.payload.title !== undefined ? { title: event.payload.title } : {}),
+            ...(event.payload.brief !== undefined ? { brief: event.payload.brief } : {}),
+            ...(event.payload.acceptanceCriteria !== undefined
+              ? { acceptanceCriteria: event.payload.acceptanceCriteria }
+              : {}),
+            ...(event.payload.attachments !== undefined
+              ? { attachments: event.payload.attachments }
+              : {}),
+            ...(event.payload.priority !== undefined ? { priority: event.payload.priority } : {}),
+            ...(event.payload.threadId !== undefined ? { threadId: event.payload.threadId } : {}),
+            updatedAt: event.payload.updatedAt,
+          });
+          return;
+        }
+
+        case "task.state-set": {
+          const existingRow = yield* projectionTaskRepository.getById({
+            taskId: event.payload.taskId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionTaskRepository.upsert({
+            ...existingRow.value,
+            state: event.payload.state,
+            updatedAt: event.payload.updatedAt,
+          });
+          return;
+        }
+
+        case "task.deleted": {
+          const existingRow = yield* projectionTaskRepository.getById({
+            taskId: event.payload.taskId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionTaskRepository.upsert({
+            ...existingRow.value,
+            deletedAt: event.payload.deletedAt,
+            updatedAt: event.payload.deletedAt,
+          });
+          return;
+        }
+
+        default:
+          return;
+      }
+    });
+
   const applyThreadsProjection: ProjectorDefinition["apply"] = (event, attachmentSideEffects) =>
     Effect.gen(function* () {
       switch (event.type) {
@@ -421,6 +528,8 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           yield* projectionThreadRepository.upsert({
             threadId: event.payload.threadId,
             projectId: event.payload.projectId,
+            origin: event.payload.origin,
+            taskId: event.payload.taskId,
             title: event.payload.title,
             model: event.payload.model,
             runtimeMode: event.payload.runtimeMode,
@@ -1116,6 +1225,14 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
       apply: applyProjectsProjection,
     },
     {
+      name: ORCHESTRATION_PROJECTOR_NAMES.projectRules,
+      apply: applyProjectRulesProjection,
+    },
+    {
+      name: ORCHESTRATION_PROJECTOR_NAMES.tasks,
+      apply: applyTasksProjection,
+    },
+    {
       name: ORCHESTRATION_PROJECTOR_NAMES.threadMessages,
       apply: applyThreadMessagesProjection,
     },
@@ -1240,6 +1357,8 @@ export const OrchestrationProjectionPipelineLive = Layer.effect(
 ).pipe(
   Layer.provideMerge(NodeServices.layer),
   Layer.provideMerge(ProjectionProjectRepositoryLive),
+  Layer.provideMerge(ProjectionProjectRulesRepositoryLive),
+  Layer.provideMerge(ProjectionTaskRepositoryLive),
   Layer.provideMerge(ProjectionThreadRepositoryLive),
   Layer.provideMerge(ProjectionThreadMessageRepositoryLive),
   Layer.provideMerge(ProjectionThreadProposedPlanRepositoryLive),

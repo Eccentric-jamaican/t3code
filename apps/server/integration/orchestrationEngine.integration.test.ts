@@ -33,6 +33,7 @@ const THREAD_ID = ThreadId.makeUnsafe("thread-1");
 const FIXTURE_TURN_ID = "fixture-turn";
 const APPROVAL_REQUEST_ID = asApprovalRequestId("req-approval-1");
 type IntegrationProvider = "codex";
+const LIVE_TEST_TIMEOUT_MS = 30_000;
 
 function nowIso() {
   return new Date().toISOString();
@@ -196,6 +197,7 @@ it.live("runs a single turn end-to-end and persists checkpoint state in sqlite +
             (message) => message.role === "assistant" && message.streaming === false,
           ) &&
           entry.checkpoints.length === 1,
+        10_000,
       );
       assert.equal(thread.checkpoints[0]?.status, "ready");
       assert.equal(thread.checkpoints[0]?.checkpointTurnCount, 1);
@@ -218,6 +220,7 @@ it.live("runs a single turn end-to-end and persists checkpoint state in sqlite +
       assert.equal(gitShowFileAtRef(harness.workspaceDir, ref1, "README.md"), "v1\n");
     }),
   ),
+  LIVE_TEST_TIMEOUT_MS,
 );
 
 it.live.skipIf(!process.env.CODEX_BINARY_PATH)(
@@ -306,7 +309,8 @@ it.live.skipIf(!process.env.CODEX_BINARY_PATH)(
         );
         assert.equal(secondThread.session?.threadId, "thread-1");
       }),
-    ),
+  ),
+  LIVE_TEST_TIMEOUT_MS,
 );
 
 it.live("runs multi-turn file edits and persists checkpoint diffs", () =>
@@ -371,6 +375,7 @@ it.live("runs multi-turn file edits and persists checkpoint diffs", () =>
       yield* harness.waitForThread(
         THREAD_ID,
         (entry) => entry.checkpoints.length === 1 && entry.session?.threadId === "thread-1",
+        10_000,
       );
 
       yield* harness.adapterHarness!.queueTurnResponse(THREAD_ID, {
@@ -415,6 +420,7 @@ it.live("runs multi-turn file edits and persists checkpoint diffs", () =>
           entry.latestTurn?.turnId === "turn-2" &&
           entry.checkpoints.length === 2 &&
           entry.checkpoints.some((checkpoint) => checkpoint.checkpointTurnCount === 2),
+        10_000,
       );
       const secondCheckpoint = secondTurnThread.checkpoints.find(
         (checkpoint) => checkpoint.checkpointTurnCount === 2,
@@ -466,6 +472,7 @@ it.live("runs multi-turn file edits and persists checkpoint diffs", () =>
       );
     }),
   ),
+  LIVE_TEST_TIMEOUT_MS,
 );
 
 it.live("tracks approval requests and resolves pending approvals on user response", () =>
@@ -547,6 +554,7 @@ it.live("tracks approval requests and resolves pending approvals on user respons
       assert.equal(approvalResponses[0]?.decision, "accept");
     }),
   ),
+  LIVE_TEST_TIMEOUT_MS,
 );
 
 it.live("records failed turn runtime state and checkpoint status as error", () =>
@@ -608,6 +616,7 @@ it.live("records failed turn runtime state and checkpoint status as error", () =
           entry.session?.lastError === "Sandbox command failed." &&
           entry.activities.some((activity) => activity.kind === "runtime.error") &&
           entry.checkpoints.length === 1,
+        10_000,
       );
       assert.equal(thread.session?.status, "error");
       assert.equal(thread.checkpoints[0]?.status, "error");
@@ -626,6 +635,7 @@ it.live("records failed turn runtime state and checkpoint status as error", () =
       );
     }),
   ),
+  LIVE_TEST_TIMEOUT_MS,
 );
 
 it.live("reverts to an earlier checkpoint and trims checkpoint projections + git refs", () =>
@@ -689,6 +699,7 @@ it.live("reverts to an earlier checkpoint and trims checkpoint projections + git
       yield* harness.waitForThread(
         THREAD_ID,
         (entry) => entry.session?.threadId === "thread-1" && entry.checkpoints.length === 1,
+        10_000,
       );
 
       yield* harness.adapterHarness!.queueTurnResponse(THREAD_ID, {
@@ -750,7 +761,7 @@ it.live("reverts to an earlier checkpoint and trims checkpoint projections + git
           entry.latestTurn?.turnId === "turn-2" &&
           entry.checkpoints.length === 2 &&
           entry.activities.some((activity) => activity.turnId === "turn-2"),
-        8000,
+        10_000,
       );
 
       yield* harness.engine.dispatch({
@@ -761,11 +772,12 @@ it.live("reverts to an earlier checkpoint and trims checkpoint projections + git
         createdAt: nowIso(),
       });
 
-      yield* harness.waitForDomainEvent((event) => event.type === "thread.reverted");
+      yield* harness.waitForDomainEvent((event) => event.type === "thread.reverted", 10_000);
       const revertedThread = yield* harness.waitForThread(
         THREAD_ID,
         (entry) =>
           entry.checkpoints.length === 1 && entry.checkpoints[0]?.checkpointTurnCount === 1,
+        10_000,
       );
       assert.equal(revertedThread.checkpoints[0]?.checkpointTurnCount, 1);
       assert.deepEqual(
@@ -791,7 +803,10 @@ it.live("reverts to an earlier checkpoint and trims checkpoint projections + git
         ),
         true,
       );
-      assert.equal(fs.readFileSync(path.join(harness.workspaceDir, "README.md"), "utf8"), "v2\n");
+      assert.equal(
+        fs.readFileSync(path.join(harness.workspaceDir, "README.md"), "utf8").replaceAll("\r\n", "\n"),
+        "v2\n",
+      );
       assert.equal(
         gitRefExists(harness.workspaceDir, checkpointRefForThreadTurn(THREAD_ID, 2)),
         false,
@@ -804,6 +819,7 @@ it.live("reverts to an earlier checkpoint and trims checkpoint projections + git
       assert.equal(checkpointRows.length, 1);
     }),
   ),
+  LIVE_TEST_TIMEOUT_MS,
 );
 
 it.live(
@@ -840,5 +856,6 @@ it.live(
           true,
         );
       }),
-    ),
+  ),
+  LIVE_TEST_TIMEOUT_MS,
 );

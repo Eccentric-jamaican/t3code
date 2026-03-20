@@ -1,7 +1,9 @@
 import type {
+  MessageId,
   OrchestrationCommand,
   OrchestrationEvent,
   OrchestrationReadModel,
+  ThreadId,
 } from "@t3tools/contracts";
 import { Effect } from "effect";
 
@@ -9,6 +11,8 @@ import { OrchestrationCommandInvariantError } from "./Errors.ts";
 import {
   requireProject,
   requireProjectAbsent,
+  requireTask,
+  requireTaskAbsent,
   requireThread,
   requireThreadAbsent,
 } from "./commandInvariants.ts";
@@ -45,6 +49,40 @@ function withEventBase(
     correlationId: input.commandId,
     metadata: input.metadata ?? {},
   };
+}
+
+function taskOwnedThreadId(taskId: string): string {
+  return `orchestrate:task:${taskId}`;
+}
+
+function newThreadIdFromTask(taskId: string): ThreadId {
+  return taskOwnedThreadId(taskId) as ThreadId;
+}
+
+function newMessageId(): MessageId {
+  return crypto.randomUUID() as MessageId;
+}
+
+function taskRunPrompt(input: {
+  readonly task: OrchestrationReadModel["tasks"][number];
+  readonly project: OrchestrationReadModel["projects"][number];
+  readonly projectRules: OrchestrationReadModel["projectRules"][number] | undefined;
+  readonly mode: "start" | "retry";
+}): string {
+  const sections = [
+    input.projectRules?.promptTemplate?.trim() ?? "",
+    `Task: ${input.task.title}`,
+    input.task.brief.trim().length > 0 ? input.task.brief.trim() : "",
+    input.task.acceptanceCriteria.trim().length > 0
+      ? `Acceptance criteria:\n${input.task.acceptanceCriteria.trim()}`
+      : "",
+    `Project: ${input.project.title}`,
+    input.mode === "retry"
+      ? "Retry this task using the current thread context. Continue from the existing work, address the previous failure or incomplete state, and end in a reviewable handoff."
+      : "Complete this task and leave the work in a reviewable state.",
+  ].filter((section) => section.length > 0);
+
+  return sections.join("\n\n");
 }
 
 export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand")(function* ({
@@ -133,6 +171,419 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "project.orchestration-rules.update": {
+      const project = yield* requireProject({
+        readModel,
+        command,
+        projectId: command.projectId,
+      });
+      const existingRules = readModel.projectRules.find((entry) => entry.projectId === command.projectId);
+      const occurredAt = command.createdAt;
+      return {
+        ...withEventBase({
+          aggregateKind: "project",
+          aggregateId: command.projectId,
+          occurredAt,
+          commandId: command.commandId,
+        }),
+        type: "project.orchestration-rules-updated",
+        payload: {
+          projectId: command.projectId,
+          promptTemplate: command.promptTemplate ?? existingRules?.promptTemplate ?? "",
+          defaultModel:
+            command.defaultModel !== undefined
+              ? command.defaultModel
+              : existingRules?.defaultModel ?? project.defaultModel ?? null,
+          defaultRuntimeMode:
+            command.defaultRuntimeMode ??
+            existingRules?.defaultRuntimeMode ??
+            "full-access",
+          onSuccessMoveTo: command.onSuccessMoveTo ?? existingRules?.onSuccessMoveTo ?? "review",
+          onFailureMoveTo: command.onFailureMoveTo ?? existingRules?.onFailureMoveTo ?? "blocked",
+          updatedAt: occurredAt,
+        },
+      };
+    }
+
+    case "task.create": {
+      yield* requireProject({
+        readModel,
+        command,
+        projectId: command.projectId,
+      });
+      yield* requireTaskAbsent({
+        readModel,
+        command,
+        taskId: command.taskId,
+      });
+      return {
+        ...withEventBase({
+          aggregateKind: "task",
+          aggregateId: command.taskId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "task.created",
+        payload: {
+          taskId: command.taskId,
+          projectId: command.projectId,
+          title: command.title,
+          brief: command.brief,
+          acceptanceCriteria: command.acceptanceCriteria ?? "",
+          ...(command.attachments !== undefined ? { attachments: command.attachments } : {}),
+          state: command.state ?? "backlog",
+          priority: command.priority ?? null,
+          threadId: null,
+          createdAt: command.createdAt,
+          updatedAt: command.createdAt,
+        },
+      };
+    }
+
+    case "task.meta.update": {
+      yield* requireTask({
+        readModel,
+        command,
+        taskId: command.taskId,
+      });
+      const occurredAt = command.updatedAt ?? nowIso();
+      return {
+        ...withEventBase({
+          aggregateKind: "task",
+          aggregateId: command.taskId,
+          occurredAt,
+          commandId: command.commandId,
+        }),
+        type: "task.meta-updated",
+        payload: {
+          taskId: command.taskId,
+          ...(command.title !== undefined ? { title: command.title } : {}),
+          ...(command.brief !== undefined ? { brief: command.brief } : {}),
+          ...(command.acceptanceCriteria !== undefined
+            ? { acceptanceCriteria: command.acceptanceCriteria }
+            : {}),
+          ...(command.attachments !== undefined ? { attachments: command.attachments } : {}),
+          ...(command.priority !== undefined ? { priority: command.priority } : {}),
+          ...(command.threadId !== undefined ? { threadId: command.threadId } : {}),
+          updatedAt: occurredAt,
+        },
+      };
+    }
+
+    case "task.state.set": {
+      yield* requireTask({
+        readModel,
+        command,
+        taskId: command.taskId,
+      });
+      return {
+        ...withEventBase({
+          aggregateKind: "task",
+          aggregateId: command.taskId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "task.state-set",
+        payload: {
+          taskId: command.taskId,
+          state: command.state,
+          updatedAt: command.createdAt,
+        },
+      };
+    }
+
+    case "task.delete": {
+      yield* requireTask({
+        readModel,
+        command,
+        taskId: command.taskId,
+      });
+      return {
+        ...withEventBase({
+          aggregateKind: "task",
+          aggregateId: command.taskId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "task.deleted",
+        payload: {
+          taskId: command.taskId,
+          deletedAt: command.createdAt,
+        },
+      };
+    }
+
+    case "task.run.start": {
+      const task = yield* requireTask({
+        readModel,
+        command,
+        taskId: command.taskId,
+      });
+      const project = yield* requireProject({
+        readModel,
+        command,
+        projectId: task.projectId,
+      });
+      const projectRules = readModel.projectRules.find((entry) => entry.projectId === task.projectId);
+      const threadId = task.threadId ?? newThreadIdFromTask(task.id);
+      const existingThread = readModel.threads.find((entry) => entry.id === threadId) ?? null;
+      const model = projectRules?.defaultModel ?? project.defaultModel ?? "gpt-5";
+      const runtimeMode = projectRules?.defaultRuntimeMode ?? "full-access";
+      const prompt = taskRunPrompt({ task, project, projectRules, mode: "start" });
+      const messageId = newMessageId();
+      const events: Array<Omit<OrchestrationEvent, "sequence">> = [];
+      if (!existingThread) {
+        events.push({
+          ...withEventBase({
+            aggregateKind: "thread",
+            aggregateId: threadId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          }),
+          type: "thread.created",
+          payload: {
+            threadId,
+            projectId: task.projectId,
+            origin: "task",
+            taskId: task.id,
+            title: task.title,
+            model,
+            runtimeMode,
+            interactionMode: "default",
+            isPinned: false,
+            branch: null,
+            worktreePath: null,
+            createdAt: command.createdAt,
+            updatedAt: command.createdAt,
+          },
+        });
+      }
+      events.push(
+        {
+          ...withEventBase({
+            aggregateKind: "task",
+            aggregateId: task.id,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          }),
+          type: "task.run-start-requested",
+          payload: {
+            taskId: task.id,
+            threadId,
+            createdAt: command.createdAt,
+          },
+        },
+        {
+          ...withEventBase({
+            aggregateKind: "task",
+            aggregateId: task.id,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          }),
+          type: "task.meta-updated",
+          payload: {
+            taskId: task.id,
+            threadId,
+            updatedAt: command.createdAt,
+          },
+        },
+        {
+          ...withEventBase({
+            aggregateKind: "task",
+            aggregateId: task.id,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          }),
+          type: "task.state-set",
+          payload: {
+            taskId: task.id,
+            state: "running",
+            updatedAt: command.createdAt,
+          },
+        },
+        {
+          ...withEventBase({
+            aggregateKind: "thread",
+            aggregateId: threadId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          }),
+          type: "thread.message-sent",
+          payload: {
+            threadId,
+            messageId,
+            role: "user",
+            text: prompt,
+            attachments: task.attachments ?? [],
+            turnId: null,
+            streaming: false,
+            createdAt: command.createdAt,
+            updatedAt: command.createdAt,
+          },
+        },
+        {
+          ...withEventBase({
+            aggregateKind: "thread",
+            aggregateId: threadId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          }),
+          type: "thread.turn-start-requested",
+          payload: {
+            threadId,
+            messageId,
+            model,
+            assistantDeliveryMode: DEFAULT_ASSISTANT_DELIVERY_MODE,
+            runtimeMode,
+            interactionMode: "default",
+            createdAt: command.createdAt,
+          },
+        },
+      );
+      return events;
+    }
+
+    case "task.run.stop": {
+      const task = yield* requireTask({
+        readModel,
+        command,
+        taskId: command.taskId,
+      });
+      const events: Array<Omit<OrchestrationEvent, "sequence">> = [
+        {
+          ...withEventBase({
+            aggregateKind: "task",
+            aggregateId: task.id,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          }),
+          type: "task.state-set",
+          payload: {
+            taskId: task.id,
+            state: "ready",
+            updatedAt: command.createdAt,
+          },
+        },
+        {
+          ...withEventBase({
+            aggregateKind: "task",
+            aggregateId: task.id,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          }),
+          type: "task.run-stop-requested",
+          payload: {
+            taskId: task.id,
+            threadId: task.threadId,
+            createdAt: command.createdAt,
+          },
+        },
+      ];
+      if (task.threadId) {
+        events.push({
+          ...withEventBase({
+            aggregateKind: "thread",
+            aggregateId: task.threadId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          }),
+          type: "thread.session-stop-requested",
+          payload: {
+            threadId: task.threadId,
+            createdAt: command.createdAt,
+          },
+        });
+      }
+      return events;
+    }
+
+    case "task.run.retry": {
+      const task = yield* requireTask({
+        readModel,
+        command,
+        taskId: command.taskId,
+      });
+      const project = yield* requireProject({
+        readModel,
+        command,
+        projectId: task.projectId,
+      });
+      const projectRules = readModel.projectRules.find((entry) => entry.projectId === task.projectId);
+      const threadId = task.threadId ?? newThreadIdFromTask(task.id);
+      const model = projectRules?.defaultModel ?? project.defaultModel ?? "gpt-5";
+      const runtimeMode = projectRules?.defaultRuntimeMode ?? "full-access";
+      const prompt = taskRunPrompt({ task, project, projectRules, mode: "retry" });
+      const messageId = newMessageId();
+      return [
+        {
+          ...withEventBase({
+            aggregateKind: "task",
+            aggregateId: task.id,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          }),
+          type: "task.run-retry-requested",
+          payload: {
+            taskId: task.id,
+            threadId,
+            createdAt: command.createdAt,
+          },
+        },
+        {
+          ...withEventBase({
+            aggregateKind: "task",
+            aggregateId: task.id,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          }),
+          type: "task.state-set",
+          payload: {
+            taskId: task.id,
+            state: "running",
+            updatedAt: command.createdAt,
+          },
+        },
+        {
+          ...withEventBase({
+            aggregateKind: "thread",
+            aggregateId: threadId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          }),
+          type: "thread.message-sent",
+          payload: {
+            threadId,
+            messageId,
+            role: "user",
+            text: prompt,
+            attachments: task.attachments ?? [],
+            turnId: null,
+            streaming: false,
+            createdAt: command.createdAt,
+            updatedAt: command.createdAt,
+          },
+        },
+        {
+          ...withEventBase({
+            aggregateKind: "thread",
+            aggregateId: threadId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          }),
+          type: "thread.turn-start-requested",
+          payload: {
+            threadId,
+            messageId,
+            model,
+            assistantDeliveryMode: DEFAULT_ASSISTANT_DELIVERY_MODE,
+            runtimeMode,
+            interactionMode: "default",
+            createdAt: command.createdAt,
+          },
+        },
+      ];
+    }
+
     case "thread.create": {
       yield* requireProject({
         readModel,
@@ -155,6 +606,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           projectId: command.projectId,
+          origin: command.origin ?? "user",
+          taskId: command.taskId ?? null,
           title: command.title,
           model: command.model,
           runtimeMode: command.runtimeMode,

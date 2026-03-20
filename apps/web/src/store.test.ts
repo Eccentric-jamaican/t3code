@@ -1,6 +1,7 @@
 import {
   DEFAULT_MODEL_BY_PROVIDER,
   ProjectId,
+  TaskId,
   ThreadId,
   TurnId,
   type OrchestrationReadModel,
@@ -15,6 +16,8 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     id: ThreadId.makeUnsafe("thread-1"),
     codexThreadId: null,
     projectId: ProjectId.makeUnsafe("project-1"),
+    origin: "user",
+    taskId: null,
     title: "Thread",
     model: "gpt-5-codex",
     runtimeMode: DEFAULT_RUNTIME_MODE,
@@ -46,6 +49,9 @@ function makeState(thread: Thread): AppState {
         scripts: [],
       },
     ],
+    projectRules: [],
+    tasks: [],
+    taskRuntimes: [],
     threads: [thread],
     threadsHydrated: true,
   };
@@ -57,6 +63,8 @@ function makeReadModelThread(
   return {
     id: ThreadId.makeUnsafe("thread-1"),
     projectId: ProjectId.makeUnsafe("project-1"),
+    origin: "user",
+    taskId: null,
     title: "Thread",
     model: "gpt-5.3-codex",
     runtimeMode: DEFAULT_RUNTIME_MODE,
@@ -93,7 +101,26 @@ function makeReadModel(thread: OrchestrationReadModel["threads"][number]): Orche
         scripts: [],
       },
     ],
+    tasks: [],
+    taskRuntimes: [],
+    projectRules: [],
     threads: [thread],
+  };
+}
+
+function makeTaskReadModel(threadId: ThreadId | null = null): OrchestrationReadModel["tasks"][number] {
+  return {
+    id: TaskId.makeUnsafe("task-1"),
+    projectId: ProjectId.makeUnsafe("project-1"),
+    title: "Task",
+    brief: "Brief",
+    acceptanceCriteria: "",
+    state: "running",
+    priority: null,
+    threadId,
+    createdAt: "2026-02-27T00:00:00.000Z",
+    updatedAt: "2026-02-27T00:00:00.000Z",
+    deletedAt: null,
   };
 }
 
@@ -175,5 +202,47 @@ describe("store read model sync", () => {
     const next = syncServerReadModel(initialState, readModel);
 
     expect(next.threads[0]?.isPinned).toBe(false);
+  });
+
+  it("maps tasks and task-owned thread metadata from the read model", () => {
+    const initialState = makeState(makeThread({ origin: "user", taskId: null }));
+    const readModel = {
+      ...makeReadModel(
+        makeReadModelThread({
+          origin: "task",
+          taskId: TaskId.makeUnsafe("task-1"),
+        }),
+      ),
+      tasks: [makeTaskReadModel(ThreadId.makeUnsafe("thread-1"))],
+      taskRuntimes: [
+        {
+          taskId: TaskId.makeUnsafe("task-1"),
+          status: "running",
+          activeTurnId: null,
+          lastError: null,
+          lastActivityAt: "2026-02-27T00:00:00.000Z",
+          updatedAt: "2026-02-27T00:00:00.000Z",
+        },
+      ],
+      projectRules: [
+        {
+          projectId: ProjectId.makeUnsafe("project-1"),
+          promptTemplate: "Do the work",
+          defaultModel: "gpt-5.3-codex",
+          defaultRuntimeMode: DEFAULT_RUNTIME_MODE,
+          onSuccessMoveTo: "review",
+          onFailureMoveTo: "blocked",
+          updatedAt: "2026-02-27T00:00:00.000Z",
+        },
+      ],
+    } satisfies OrchestrationReadModel;
+
+    const next = syncServerReadModel(initialState, readModel);
+
+    expect(next.tasks).toHaveLength(1);
+    expect(next.taskRuntimes[0]?.status).toBe("running");
+    expect(next.projectRules[0]?.onSuccessMoveTo).toBe("review");
+    expect(next.threads[0]?.origin).toBe("task");
+    expect(next.threads[0]?.taskId).toBe(TaskId.makeUnsafe("task-1"));
   });
 });

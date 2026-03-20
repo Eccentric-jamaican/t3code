@@ -2,6 +2,7 @@ import type {
   OrchestrationEvent,
   OrchestrationReadModel,
   ProjectId,
+  TaskId,
   ThreadId,
 } from "@t3tools/contracts";
 import { OrchestrationCommand } from "@t3tools/contracts";
@@ -30,16 +31,28 @@ interface CommandEnvelope {
 }
 
 function commandToAggregateRef(command: OrchestrationCommand): {
-  readonly aggregateKind: "project" | "thread";
-  readonly aggregateId: ProjectId | ThreadId;
+  readonly aggregateKind: "project" | "task" | "thread";
+  readonly aggregateId: ProjectId | TaskId | ThreadId;
 } {
   switch (command.type) {
     case "project.create":
     case "project.meta.update":
     case "project.delete":
+    case "project.orchestration-rules.update":
       return {
         aggregateKind: "project",
         aggregateId: command.projectId,
+      };
+    case "task.create":
+    case "task.meta.update":
+    case "task.state.set":
+    case "task.delete":
+    case "task.run.start":
+    case "task.run.stop":
+    case "task.run.retry":
+      return {
+        aggregateKind: "task",
+        aggregateId: command.taskId,
       };
     default:
       return {
