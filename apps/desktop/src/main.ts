@@ -36,6 +36,7 @@ import {
   reduceDesktopUpdateStateOnNoUpdate,
   reduceDesktopUpdateStateOnUpdateAvailable,
 } from "./updateMachine";
+import { importLegacyDesktopStateIfNeeded } from "./legacyStateImport";
 import { resolveDesktopStateDir } from "./statePaths";
 
 fixPath();
@@ -52,6 +53,10 @@ const UPDATE_INSTALL_CHANNEL = "desktop:update-install";
 const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
 const APP_DISPLAY_NAME = getAppDisplayName(isDevelopment);
 const STATE_DIR = resolveDesktopStateDir(process.env.T3CODE_STATE_DIR);
+const legacyStateImport = importLegacyDesktopStateIfNeeded({
+  targetStateDir: STATE_DIR,
+  explicitStateDir: process.env.T3CODE_STATE_DIR,
+});
 const ELECTRON_USER_DATA_DIR =
   process.env.T3CODE_ELECTRON_USER_DATA_DIR?.trim() ||
   Path.join(app.getPath("appData"), APP_DISPLAY_NAME);
@@ -208,6 +213,11 @@ function captureBackendOutput(child: ChildProcess.ChildProcess): void {
 }
 
 initializePackagedLogging();
+if (legacyStateImport.imported) {
+  writeDesktopLogHeader(
+    `imported legacy desktop state from ${legacyStateImport.sourceStateDir} to ${legacyStateImport.targetStateDir}`,
+  );
+}
 
 function getDestructiveMenuIcon(): Electron.NativeImage | undefined {
   if (process.platform !== "darwin") return undefined;
