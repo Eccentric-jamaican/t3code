@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 
 import { isElectron } from "../env";
-import { SidebarTrigger } from "../components/ui/sidebar";
+import { SidebarInsetTrigger } from "../components/ui/sidebar";
 
 function ChatIndexRouteView() {
   return (
@@ -9,14 +9,15 @@ function ChatIndexRouteView() {
       {!isElectron && (
         <header className="border-b border-border px-3 py-2 md:hidden">
           <div className="flex items-center gap-2">
-            <SidebarTrigger className="shrink-0" />
+            <SidebarInsetTrigger className="shrink-0" />
             <span className="text-sm font-medium text-foreground">Threads</span>
           </div>
         </header>
       )}
 
       {isElectron && (
-        <div className="drag-region flex h-[52px] shrink-0 items-center border-b border-border px-5">
+        <div className="drag-region flex h-[52px] shrink-0 items-center gap-2 border-b border-border px-3 sm:px-5">
+          <SidebarInsetTrigger className="shrink-0 [-webkit-app-region:no-drag]" />
           <span className="text-xs text-muted-foreground/50">No active thread</span>
         </div>
       )}

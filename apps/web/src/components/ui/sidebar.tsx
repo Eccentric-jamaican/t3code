@@ -327,6 +327,16 @@ function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<t
   );
 }
 
+function SidebarInsetTrigger(props: React.ComponentProps<typeof SidebarTrigger>) {
+  const { isMobile, open } = useSidebar();
+
+  if (!isMobile && open) {
+    return null;
+  }
+
+  return <SidebarTrigger {...props} />;
+}
+
 function SidebarDockToggleIcon({
   className,
   collapsed = false,
@@ -1017,6 +1027,7 @@ export {
   SidebarHeader,
   SidebarInput,
   SidebarInset,
+  SidebarInsetTrigger,
   SidebarMenu,
   SidebarMenuAction,
   SidebarMenuBadge,

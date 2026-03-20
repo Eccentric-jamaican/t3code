@@ -21,7 +21,7 @@ import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Switch } from "../components/ui/switch";
-import { SidebarInset, SidebarTrigger } from "~/components/ui/sidebar";
+import { SidebarInset, SidebarInsetTrigger } from "~/components/ui/sidebar";
 
 const THEME_OPTIONS = [
   {
@@ -190,7 +190,7 @@ function SettingsRouteView() {
           )}
         >
           <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden sm:gap-3">
-            <SidebarTrigger className="shrink-0" />
+            <SidebarInsetTrigger className="shrink-0" />
             <span className="min-w-0 truncate text-sm font-medium text-foreground">Settings</span>
           </div>
         </header>
