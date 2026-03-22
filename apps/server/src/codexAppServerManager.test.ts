@@ -169,6 +169,11 @@ describe("classifyCodexStderrLine", () => {
 });
 
 describe("normalizeCodexModelSlug", () => {
+  it("maps 5.4 mini aliases to gpt-5.4-mini", () => {
+    expect(normalizeCodexModelSlug("5.4-mini")).toBe("gpt-5.4-mini");
+    expect(normalizeCodexModelSlug("gpt-5.4-mini")).toBe("gpt-5.4-mini");
+  });
+
   it("maps 5.3 aliases to gpt-5.3-codex", () => {
     expect(normalizeCodexModelSlug("5.3")).toBe("gpt-5.3-codex");
     expect(normalizeCodexModelSlug("gpt-5.3")).toBe("gpt-5.3-codex");
@@ -395,6 +400,7 @@ describe("sendTurn", () => {
 
   it("passes Codex plan mode as a collaboration preset on turn/start", async () => {
     const { manager, context, sendRequest } = createSendTurnHarness();
+    context.session.model = "gpt-5.4-mini";
 
     await manager.sendTurn({
       threadId: asThreadId("thread_1"),
@@ -411,11 +417,11 @@ describe("sendTurn", () => {
           text_elements: [],
         },
       ],
-      model: "gpt-5.3-codex",
+      model: "gpt-5.4-mini",
       collaborationMode: {
         mode: "plan",
         settings: {
-          model: "gpt-5.3-codex",
+          model: "gpt-5.4-mini",
           reasoning_effort: "medium",
           developer_instructions: CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS,
         },

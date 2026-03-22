@@ -30,6 +30,7 @@ describe("getAppModelOptions", () => {
 
     expect(options.map((option) => option.slug)).toEqual([
       "gpt-5.4",
+      "gpt-5.4-mini",
       "gpt-5.3-codex",
       "gpt-5.3-codex-spark",
       "gpt-5.2-codex",
@@ -97,8 +98,9 @@ describe("resolveAppServiceTier", () => {
 });
 
 describe("shouldShowFastTierIcon", () => {
-  it("shows the fast-tier icon only for gpt-5.4 on fast tier", () => {
+  it("shows the fast-tier icon only for supported fast-tier models on fast tier", () => {
     expect(shouldShowFastTierIcon("gpt-5.4", "fast")).toBe(true);
+    expect(shouldShowFastTierIcon("gpt-5.4-mini", "fast")).toBe(true);
     expect(shouldShowFastTierIcon("gpt-5.4", "auto")).toBe(false);
     expect(shouldShowFastTierIcon("gpt-5.3-codex", "fast")).toBe(false);
   });
