@@ -246,6 +246,11 @@ interface BrowserRuntimeRecord {
   navigation: BrowserNavigationState;
 }
 
+function isNavigationAbortError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("ERR_ABORTED") || message.includes("ERR_FAILED");
+}
+
 function nowIso(): string {
   return new Date().toISOString();
 }
@@ -411,7 +416,7 @@ export class BrowserRuntimeRegistry extends EventEmitter<{
   async navigate(projectId: ProjectId, url: string): Promise<BrowserSessionSnapshot> {
     const runtime = await this.ensureRuntime(projectId);
     const targetUrl = this.normalizeUrl(url);
-    await runtime.view.webContents.loadURL(targetUrl);
+    await this.loadUrl(runtime, targetUrl);
     runtime.navigation = {
       ...runtime.navigation,
       url: targetUrl,
@@ -743,6 +748,30 @@ export class BrowserRuntimeRegistry extends EventEmitter<{
     };
   }
 
+  private async loadUrl(runtime: BrowserRuntimeRecord, url: string): Promise<void> {
+    try {
+      await runtime.view.webContents.loadURL(url);
+    } catch (error) {
+      const committedUrl = runtime.view.webContents.getURL();
+      if (
+        isNavigationAbortError(error) &&
+        committedUrl.length > 0 &&
+        committedUrl !== "about:blank"
+      ) {
+        return;
+      }
+      throw error;
+    }
+  }
+
+  private applyBounds(runtime: BrowserRuntimeRecord, bounds: BrowserPaneBounds): void {
+    runtime.view.setBounds({ ...bounds });
+    runtime.view.setVisible(bounds.width > 0 && bounds.height > 0);
+    void runtime.view.webContents
+      .executeJavaScript(`window.dispatchEvent(new Event("resize"));`, true)
+      .catch(() => undefined);
+  }
+
   private attachProject(window: BrowserWindow, projectId: ProjectId, bounds: BrowserPaneBounds): void {
     const runtime = this.runtimes.get(projectId);
     if (!runtime) {
@@ -758,12 +787,10 @@ export class BrowserRuntimeRegistry extends EventEmitter<{
         contentView.removeChildView(attached.view);
       }
     }
-
-    runtime.view.setBounds({ ...bounds });
-    runtime.view.setVisible(bounds.width > 0 && bounds.height > 0);
     if (this.attachedProjectId !== projectId) {
       contentView.addChildView(runtime.view);
     }
+    this.applyBounds(runtime, bounds);
     this.attachedProjectId = projectId;
   }
 

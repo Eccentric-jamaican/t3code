@@ -1,8 +1,22 @@
-import type { BrowserInspectCapture, BrowserSessionSnapshot, ProjectId, RuntimeMode, ThreadId } from "@t3tools/contracts";
-import { ArrowLeftIcon, ArrowRightIcon, GlobeIcon, RefreshCwIcon, SearchIcon, XIcon } from "lucide-react";
+import type {
+  BrowserInspectCapture,
+  BrowserSessionSnapshot,
+  ProjectId,
+  RuntimeMode,
+  ThreadId,
+} from "@t3tools/contracts";
+import {
+  ArrowLeftIcon,
+  ArrowRightIcon,
+  GlobeIcon,
+  RefreshCwIcon,
+  SearchIcon,
+  XIcon,
+} from "lucide-react";
 import {
   type KeyboardEvent,
   type PointerEvent as ReactPointerEvent,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -10,11 +24,12 @@ import {
 } from "react";
 
 import { useBrowserPaneStore } from "~/browserPaneStore";
-import { useComposerDraftStore } from "~/composerDraftStore";
-import { readNativeApi } from "~/nativeApi";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
+import { toastManager } from "~/components/ui/toast";
 import { Toggle } from "~/components/ui/toggle";
+import { useComposerDraftStore } from "~/composerDraftStore";
+import { readNativeApi } from "~/nativeApi";
 import { cn } from "~/lib/utils";
 
 function dataUrlToFile(dataUrl: string, name: string): File {
@@ -50,9 +65,10 @@ function buildInspectPrompt(capture: BrowserInspectCapture): string {
 }
 
 function createImageAttachment(dataUrl: string) {
-  const id = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
-    ? crypto.randomUUID()
-    : `browser-inspect-${Date.now()}`;
+  const id =
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `browser-inspect-${Date.now()}`;
   const name = `${id}.png`;
   const file = dataUrlToFile(dataUrl, name);
   return {
@@ -64,6 +80,17 @@ function createImageAttachment(dataUrl: string) {
     previewUrl: dataUrl,
     file,
   };
+}
+
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message.trim().length > 0) {
+    return error.message;
+  }
+  return String(error);
+}
+
+function isBenignBrowserError(error: unknown): boolean {
+  return getErrorMessage(error).includes("ERR_ABORTED");
 }
 
 interface BrowserPaneProps {
@@ -87,9 +114,32 @@ export default function IntegratedBrowserPane(props: BrowserPaneProps) {
   const [isSyncingBounds, setIsSyncingBounds] = useState(false);
   const captureInFlightRef = useRef(false);
   const api = readNativeApi();
-  const isDesktopBrowserAvailable = api && typeof window !== "undefined" && Boolean(window.desktopBridge?.browser);
-
+  const isDesktopBrowserAvailable =
+    api && typeof window !== "undefined" && Boolean(window.desktopBridge?.browser);
   const session = snapshot?.session ?? null;
+
+  const handleBrowserError = useCallback((action: string, error: unknown) => {
+    if (isBenignBrowserError(error)) {
+      return;
+    }
+    toastManager.add({
+      type: "error",
+      title: "Browser action failed",
+      description: `${action}: ${getErrorMessage(error)}`,
+    });
+  }, []);
+
+  const runBrowserAction = useCallback(
+    async <T,>(action: string, operation: () => Promise<T>): Promise<T | undefined> => {
+      try {
+        return await operation();
+      } catch (error) {
+        handleBrowserError(action, error);
+        return undefined;
+      }
+    },
+    [handleBrowserError],
+  );
 
   useEffect(() => {
     if (!api?.browser) {
@@ -127,22 +177,36 @@ export default function IntegratedBrowserPane(props: BrowserPaneProps) {
             setPrompt(activeThreadId, nextPrompt);
             addImage(activeThreadId, createImageAttachment(capture.screenshotDataUrl));
           })
+          .catch((error) => {
+            handleBrowserError("capture inspect selection", error);
+          })
           .finally(() => {
             captureInFlightRef.current = false;
           });
       }
     });
     return unsubscribe;
-  }, [activeProjectId, activeThreadId, addImage, api, setOpen, setPrompt]);
+  }, [
+    activeProjectId,
+    activeThreadId,
+    addImage,
+    api,
+    handleBrowserError,
+    setOpen,
+    setPrompt,
+  ]);
 
   useEffect(() => {
     if (!api?.browser || !activeProjectId) {
       setSnapshot(null);
       return;
     }
-    void api.browser.getState({ projectId: activeProjectId }).then(setSnapshot).catch(() => {
-      setSnapshot(null);
-    });
+    void api.browser
+      .getState({ projectId: activeProjectId })
+      .then(setSnapshot)
+      .catch(() => {
+        setSnapshot(null);
+      });
   }, [activeProjectId, api]);
 
   useEffect(() => {
@@ -153,7 +217,7 @@ export default function IntegratedBrowserPane(props: BrowserPaneProps) {
   useLayoutEffect(() => {
     if (!open || !api?.browser || !activeProjectId || !viewportRef.current) {
       if (!open) {
-        void api?.browser?.closePane().catch(() => {});
+        void api?.browser?.closePane().catch(() => undefined);
       }
       return;
     }
@@ -169,17 +233,19 @@ export default function IntegratedBrowserPane(props: BrowserPaneProps) {
       }
       setIsSyncingBounds(true);
       try {
-        const nextSnapshot = await api.browser.open({
-          projectId: activeProjectId,
-          bounds: {
-            x: rect.x,
-            y: rect.y,
-            width: rect.width,
-            height: rect.height,
-          },
-        });
+        const nextSnapshot = await runBrowserAction("open browser pane", () =>
+          api.browser.open({
+            projectId: activeProjectId,
+            bounds: {
+              x: rect.left,
+              y: rect.top,
+              width: rect.width,
+              height: rect.height,
+            },
+          }),
+        );
         if (!cancelled) {
-          setSnapshot(nextSnapshot);
+          setSnapshot(nextSnapshot ?? null);
         }
       } finally {
         if (!cancelled) {
@@ -192,14 +258,19 @@ export default function IntegratedBrowserPane(props: BrowserPaneProps) {
       void syncBounds();
     });
     observer.observe(viewportRef.current);
-    void syncBounds();
+    const frameId = window.requestAnimationFrame(() => {
+      void syncBounds();
+    });
     window.addEventListener("resize", syncBounds);
+    window.addEventListener("scroll", syncBounds, true);
     return () => {
       cancelled = true;
+      window.cancelAnimationFrame(frameId);
       observer.disconnect();
       window.removeEventListener("resize", syncBounds);
+      window.removeEventListener("scroll", syncBounds, true);
     };
-  }, [activeProjectId, api, open, width]);
+  }, [activeProjectId, api, open, runBrowserAction, width]);
 
   const onResizeStart = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (!paneRef.current) {
@@ -223,11 +294,15 @@ export default function IntegratedBrowserPane(props: BrowserPaneProps) {
     if (!api?.browser || !activeProjectId || urlInput.trim().length === 0) {
       return;
     }
-    const nextSnapshot = await api.browser.navigate({
-      projectId: activeProjectId,
-      url: urlInput,
-    });
-    setSnapshot(nextSnapshot);
+    const nextSnapshot = await runBrowserAction("navigate browser", () =>
+      api.browser.navigate({
+        projectId: activeProjectId,
+        url: urlInput,
+      }),
+    );
+    if (nextSnapshot) {
+      setSnapshot(nextSnapshot);
+    }
   };
 
   const onUrlKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
@@ -263,7 +338,18 @@ export default function IntegratedBrowserPane(props: BrowserPaneProps) {
             size="icon-xs"
             aria-label="Back"
             disabled={controlsDisabled || !session?.navigation.canGoBack}
-            onClick={() => activeProjectId && void api.browser.back({ projectId: activeProjectId }).then(setSnapshot)}
+            onClick={() => {
+              if (!activeProjectId) {
+                return;
+              }
+              void runBrowserAction("go back", () =>
+                api.browser.back({ projectId: activeProjectId }),
+              ).then((nextSnapshot) => {
+                if (nextSnapshot) {
+                  setSnapshot(nextSnapshot);
+                }
+              });
+            }}
           >
             <ArrowLeftIcon />
           </Button>
@@ -273,9 +359,18 @@ export default function IntegratedBrowserPane(props: BrowserPaneProps) {
             size="icon-xs"
             aria-label="Forward"
             disabled={controlsDisabled || !session?.navigation.canGoForward}
-            onClick={() =>
-              activeProjectId && void api.browser.forward({ projectId: activeProjectId }).then(setSnapshot)
-            }
+            onClick={() => {
+              if (!activeProjectId) {
+                return;
+              }
+              void runBrowserAction("go forward", () =>
+                api.browser.forward({ projectId: activeProjectId }),
+              ).then((nextSnapshot) => {
+                if (nextSnapshot) {
+                  setSnapshot(nextSnapshot);
+                }
+              });
+            }}
           >
             <ArrowRightIcon />
           </Button>
@@ -285,9 +380,18 @@ export default function IntegratedBrowserPane(props: BrowserPaneProps) {
             size="icon-xs"
             aria-label="Reload"
             disabled={controlsDisabled}
-            onClick={() =>
-              activeProjectId && void api.browser.reload({ projectId: activeProjectId }).then(setSnapshot)
-            }
+            onClick={() => {
+              if (!activeProjectId) {
+                return;
+              }
+              void runBrowserAction("reload page", () =>
+                api.browser.reload({ projectId: activeProjectId }),
+              ).then((nextSnapshot) => {
+                if (nextSnapshot) {
+                  setSnapshot(nextSnapshot);
+                }
+              });
+            }}
           >
             <RefreshCwIcon className={cn(session?.navigation.isLoading && "animate-spin")} />
           </Button>
@@ -295,17 +399,24 @@ export default function IntegratedBrowserPane(props: BrowserPaneProps) {
             value={urlInput}
             onChange={(event) => setUrlInput(event.target.value)}
             onKeyDown={onUrlKeyDown}
-            onBlur={() => void navigate()}
             className="h-8 min-w-0 flex-1 rounded-md border-border bg-muted/40 text-xs"
             spellCheck={false}
             aria-label="Browser URL"
           />
           <Toggle
             pressed={session?.inspectMode === true}
-            onPressedChange={(next) =>
-              activeProjectId &&
-              void api.browser.setInspectMode({ projectId: activeProjectId, enabled: next }).then(setSnapshot)
-            }
+            onPressedChange={(next) => {
+              if (!activeProjectId) {
+                return;
+              }
+              void runBrowserAction("toggle inspect mode", () =>
+                api.browser.setInspectMode({ projectId: activeProjectId, enabled: next }),
+              ).then((nextSnapshot) => {
+                if (nextSnapshot) {
+                  setSnapshot(nextSnapshot);
+                }
+              });
+            }}
             variant="outline"
             size="sm"
             aria-label="Inspect element"
@@ -319,12 +430,16 @@ export default function IntegratedBrowserPane(props: BrowserPaneProps) {
             size="icon-xs"
             aria-label="Kill browser"
             disabled={controlsDisabled}
-            onClick={() =>
-              activeProjectId &&
-              void api.browser.kill({ projectId: activeProjectId }).then(() => {
+            onClick={() => {
+              if (!activeProjectId) {
+                return;
+              }
+              void runBrowserAction("kill browser", () =>
+                api.browser.kill({ projectId: activeProjectId }),
+              ).then(() => {
                 setSnapshot(null);
-              })
-            }
+              });
+            }}
           >
             <GlobeIcon />
           </Button>
@@ -341,7 +456,7 @@ export default function IntegratedBrowserPane(props: BrowserPaneProps) {
         <div className="relative min-h-0 flex-1">
           <div ref={viewportRef} className="absolute inset-0" />
           {(isSyncingBounds || !session) && (
-          <div className="absolute inset-0 flex items-center justify-center bg-background/80 text-xs text-muted-foreground">
+            <div className="absolute inset-0 flex items-center justify-center bg-background/80 text-xs text-muted-foreground">
               Loading browser...
             </div>
           )}
