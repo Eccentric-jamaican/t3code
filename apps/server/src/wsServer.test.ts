@@ -11,7 +11,6 @@ import WebSocket from "ws";
 import { ServerConfig, type ServerConfigShape } from "./config";
 import {
   makeServerProviderLayer,
-  makeServerRuntimeCoreLayer,
   makeServerRuntimeServicesLayer,
 } from "./serverLayers";
 
@@ -472,10 +471,9 @@ describe("WebSocket Server", () => {
       logWebSocketEvents: options.logWebSocketEvents ?? Boolean(options.devUrl),
     } satisfies ServerConfigShape);
     const baseLayer = Layer.merge(persistenceLayer, serverConfigLayer);
-    const coreLayer = makeServerRuntimeCoreLayer().pipe(Layer.provide(baseLayer));
     const providerLayer =
-      options.providerLayer ??
-      makeServerProviderLayer().pipe(Layer.provide(Layer.merge(coreLayer, baseLayer)));
+      options.providerLayer ?? makeServerProviderLayer().pipe(Layer.provideMerge(baseLayer));
+    const infrastructureLayer = providerLayer;
     const runtimeOverrides = Layer.mergeAll(
       options.gitManager ? Layer.succeed(GitManager, options.gitManager) : Layer.empty,
       options.gitCore
@@ -485,24 +483,19 @@ describe("WebSocket Server", () => {
         ? Layer.succeed(TerminalManager, options.terminalManager)
         : Layer.empty,
     );
-
-    const runtimeLayer = Layer.empty.pipe(
-      Layer.provideMerge(providerLayer),
-      Layer.provideMerge(
-        makeServerRuntimeServicesLayer({
-          coreLayer: coreLayer as ReturnType<typeof makeServerRuntimeCoreLayer>,
-        }).pipe(
-          Layer.provide(Layer.merge(providerLayer, baseLayer)),
-        ),
+    const runtimeLayer = Layer.merge(
+      Layer.merge(
+        makeServerRuntimeServicesLayer().pipe(Layer.provide(infrastructureLayer)),
+        infrastructureLayer,
       ),
-      Layer.provideMerge(runtimeOverrides),
+      runtimeOverrides,
     );
     const dependenciesLayer = Layer.empty.pipe(
       Layer.provideMerge(runtimeLayer),
       Layer.provideMerge(providerHealthLayer),
       Layer.provideMerge(codexAccountServiceLayer),
       Layer.provideMerge(openLayer),
-      Layer.provideMerge(serverConfigLayer),
+      Layer.provideMerge(baseLayer),
       Layer.provideMerge(AnalyticsService.layerTest),
       Layer.provideMerge(NodeServices.layer),
     );
