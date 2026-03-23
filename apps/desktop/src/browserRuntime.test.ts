@@ -29,6 +29,8 @@ vi.mock("electron", () => {
     currentUrl = "";
     title = "";
     loading = false;
+    zoomFactor = 1;
+    ownerView: MockWebContentsView | null = null;
     readonly navigationHistory = {
       canGoBack: () => false,
       canGoForward: () => false,
@@ -59,7 +61,17 @@ vi.mock("electron", () => {
       return this.loading;
     }
 
-    async executeJavaScript(): Promise<null> {
+    async executeJavaScript(code: string): Promise<unknown> {
+      if (code.includes("window.innerWidth")) {
+        const bounds = this.ownerView?.getBounds() ?? { width: 0 };
+        const viewportWidth =
+          bounds.width * (this.ownerView?.viewportMismatchFactor ?? 1) / this.zoomFactor;
+        return {
+          innerWidth: viewportWidth,
+          visualViewportWidth: viewportWidth,
+          devicePixelRatio: this.zoomFactor,
+        };
+      }
       return null;
     }
 
@@ -74,13 +86,26 @@ vi.mock("electron", () => {
     close(): void {}
 
     sendInputEvent(): void {}
+
+    getZoomFactor(): number {
+      return this.zoomFactor;
+    }
+
+    setZoomFactor(factor: number): void {
+      this.zoomFactor = factor;
+    }
   }
 
   class MockWebContentsView {
     readonly webContents = new MockWebContents();
     readonly setBoundsCalls: Array<{ x: number; y: number; width: number; height: number }> = [];
     readonly setVisibleCalls: boolean[] = [];
+    viewportMismatchFactor = 1;
     private bounds = { x: 0, y: 0, width: 0, height: 0 };
+
+    constructor() {
+      this.webContents.ownerView = this;
+    }
 
     setBounds(bounds: { x: number; y: number; width: number; height: number }): void {
       globalThis.__browserRuntimeTestLog?.push("setBounds");
@@ -236,5 +261,35 @@ describe("BrowserRuntimeRegistry", () => {
       width: 480,
       height: 360,
     });
+  });
+
+  it("reconciles the embedded viewport width when the page renders too wide", async () => {
+    const registry = new BrowserRuntimeRegistry({ browserPreloadPath: "test-preload.js" });
+    const window = {
+      contentView: {
+        addChildView: vi.fn(),
+        removeChildView: vi.fn(),
+      },
+    };
+    const projectId = ProjectId.makeUnsafe("project-5");
+
+    registry.setWindow(window as never);
+    await registry.open(projectId, { x: 10, y: 20, width: 420, height: 320 });
+
+    const runtime = ((registry as any).runtimes as Map<
+      ProjectId,
+      {
+        view: {
+          viewportMismatchFactor: number;
+          webContents: { getZoomFactor: () => number };
+        };
+      }
+    >).get(projectId);
+
+    expect(runtime).toBeDefined();
+    runtime!.view.viewportMismatchFactor = 1.5;
+    await (registry as any).syncViewportToPane(projectId);
+
+    expect(runtime!.view.webContents.getZoomFactor()).toBeCloseTo(1.5, 5);
   });
 });

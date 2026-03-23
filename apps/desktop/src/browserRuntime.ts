@@ -245,6 +245,13 @@ interface BrowserRuntimeRecord {
   inspectMode: boolean;
   hasSelection: boolean;
   navigation: BrowserNavigationState;
+  viewportSyncTimeout: ReturnType<typeof globalThis.setTimeout> | null;
+}
+
+interface BrowserViewportMetrics {
+  innerWidth: number;
+  visualViewportWidth: number | null;
+  devicePixelRatio: number | null;
 }
 
 function isNavigationAbortError(error: unknown): boolean {
@@ -699,6 +706,7 @@ export class BrowserRuntimeRegistry extends EventEmitter<{
         isLoading: false,
         lastCommittedAt: null,
       },
+      viewportSyncTimeout: null,
     };
     this.installListeners(runtime);
     this.runtimes.set(projectId, runtime);
@@ -807,6 +815,97 @@ export class BrowserRuntimeRegistry extends EventEmitter<{
       .catch(() => undefined);
   }
 
+  private scheduleViewportSync(projectId: ProjectId, delayMs = 16): void {
+    const runtime = this.runtimes.get(projectId);
+    if (!runtime) {
+      return;
+    }
+    if (runtime.viewportSyncTimeout) {
+      globalThis.clearTimeout(runtime.viewportSyncTimeout);
+    }
+    runtime.viewportSyncTimeout = globalThis.setTimeout(() => {
+      runtime.viewportSyncTimeout = null;
+      void this.syncViewportToPane(projectId).catch(() => undefined);
+    }, delayMs);
+  }
+
+  private async readViewportMetrics(
+    runtime: BrowserRuntimeRecord,
+  ): Promise<BrowserViewportMetrics | null> {
+    const result = await runtime.view.webContents.executeJavaScript(
+      `(() => ({
+        innerWidth: window.innerWidth,
+        visualViewportWidth: window.visualViewport?.width ?? null,
+        devicePixelRatio: window.devicePixelRatio ?? null,
+      }))()`,
+      true,
+    );
+    if (!result || typeof result !== "object") {
+      return null;
+    }
+    const record = result as Partial<BrowserViewportMetrics>;
+    const innerWidth =
+      typeof record.innerWidth === "number" && Number.isFinite(record.innerWidth)
+        ? record.innerWidth
+        : null;
+    if (innerWidth === null || innerWidth <= 0) {
+      return null;
+    }
+    return {
+      innerWidth,
+      visualViewportWidth:
+        typeof record.visualViewportWidth === "number" &&
+        Number.isFinite(record.visualViewportWidth) &&
+        record.visualViewportWidth > 0
+          ? record.visualViewportWidth
+          : null,
+      devicePixelRatio:
+        typeof record.devicePixelRatio === "number" && Number.isFinite(record.devicePixelRatio)
+          ? record.devicePixelRatio
+          : null,
+    };
+  }
+
+  private async syncViewportToPane(projectId: ProjectId): Promise<void> {
+    if (
+      !this.window ||
+      !this.paneOpen ||
+      !this.paneBounds ||
+      this.paneProjectId !== projectId ||
+      this.attachedProjectId !== projectId
+    ) {
+      return;
+    }
+    const runtime = this.runtimes.get(projectId);
+    if (!runtime || this.paneBounds.width <= 0) {
+      return;
+    }
+
+    const metrics = await this.readViewportMetrics(runtime);
+    if (!metrics) {
+      return;
+    }
+
+    const actualViewportWidth = metrics.visualViewportWidth ?? metrics.innerWidth;
+    if (!Number.isFinite(actualViewportWidth) || actualViewportWidth <= 0) {
+      return;
+    }
+
+    const widthRatio = actualViewportWidth / this.paneBounds.width;
+    if (Math.abs(widthRatio - 1) < 0.03) {
+      return;
+    }
+
+    const currentZoomFactor = runtime.view.webContents.getZoomFactor();
+    const nextZoomFactor = Math.max(0.25, Math.min(5, currentZoomFactor * widthRatio));
+    if (Math.abs(nextZoomFactor - currentZoomFactor) < 0.02) {
+      return;
+    }
+
+    runtime.view.webContents.setZoomFactor(nextZoomFactor);
+    this.applyBounds(runtime, this.paneBounds, { forceViewportRefresh: true });
+  }
+
   private attachProject(window: BrowserWindow, projectId: ProjectId, bounds: BrowserPaneBounds): void {
     const runtime = this.runtimes.get(projectId);
     if (!runtime) {
@@ -828,6 +927,7 @@ export class BrowserRuntimeRegistry extends EventEmitter<{
     this.applyBounds(runtime, bounds, { forceViewportRefresh: true });
     this.attachedProjectId = projectId;
     this.scheduleAttachedBoundsReapply(projectId);
+    this.scheduleViewportSync(projectId);
   }
 
   private scheduleAttachedBoundsReapply(projectId: ProjectId): void {
@@ -853,6 +953,7 @@ export class BrowserRuntimeRegistry extends EventEmitter<{
       return;
     }
     this.applyBounds(runtime, this.paneBounds, { forceViewportRefresh: true });
+    this.scheduleViewportSync(projectId);
   }
 
   private detachAttachedView(window: BrowserWindow): void {
@@ -863,6 +964,10 @@ export class BrowserRuntimeRegistry extends EventEmitter<{
     if (!runtime) {
       this.attachedProjectId = null;
       return;
+    }
+    if (runtime.viewportSyncTimeout) {
+      globalThis.clearTimeout(runtime.viewportSyncTimeout);
+      runtime.viewportSyncTimeout = null;
     }
     const contentView = (window as BrowserWindow & {
       contentView: { removeChildView: (view: Electron.WebContentsView) => void };
