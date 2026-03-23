@@ -234,6 +234,7 @@ const CAPTURE_SELECTION_SCRIPT = String.raw`
 
 const MAX_TEXT_LENGTH = 20_000;
 const WAIT_POLL_INTERVAL_MS = 100;
+const ATTACHED_BOUNDS_REAPPLY_DELAYS_MS = [0, 75] as const;
 
 interface BrowserRuntimeRecord {
   projectId: ProjectId;
@@ -724,6 +725,15 @@ export class BrowserRuntimeRegistry extends EventEmitter<{
     runtime.view.webContents.on("page-title-updated", syncNavigation);
     runtime.view.webContents.on("did-start-loading", syncNavigation);
     runtime.view.webContents.on("did-stop-loading", syncNavigation);
+    runtime.view.webContents.on("dom-ready", () => {
+      this.scheduleAttachedBoundsReapply(runtime.projectId);
+    });
+    runtime.view.webContents.on("did-finish-load", () => {
+      this.scheduleAttachedBoundsReapply(runtime.projectId);
+    });
+    runtime.view.webContents.on("did-stop-loading", () => {
+      this.scheduleAttachedBoundsReapply(runtime.projectId);
+    });
     runtime.view.webContents.on("render-process-gone", () => {
       runtime.updatedAt = nowIso();
       this.emitStateUpdated(runtime.projectId);
@@ -764,11 +774,36 @@ export class BrowserRuntimeRegistry extends EventEmitter<{
     }
   }
 
-  private applyBounds(runtime: BrowserRuntimeRecord, bounds: BrowserPaneBounds): void {
-    runtime.view.setBounds({ ...bounds });
-    runtime.view.setVisible(bounds.width > 0 && bounds.height > 0);
+  private applyBounds(
+    runtime: BrowserRuntimeRecord,
+    bounds: BrowserPaneBounds,
+    options: { forceViewportRefresh?: boolean } = {},
+  ): void {
+    const nextBounds = normalizeBounds(bounds);
+    const shouldShow = nextBounds.width > 0 && nextBounds.height > 0;
+
+    if (options.forceViewportRefresh && shouldShow) {
+      const nudgedBounds = { ...nextBounds };
+      if (nudgedBounds.width > 1) {
+        nudgedBounds.width -= 1;
+      } else if (nudgedBounds.height > 1) {
+        nudgedBounds.height -= 1;
+      }
+      if (
+        nudgedBounds.width !== nextBounds.width ||
+        nudgedBounds.height !== nextBounds.height
+      ) {
+        runtime.view.setBounds(nudgedBounds);
+      }
+    }
+
+    runtime.view.setBounds(nextBounds);
+    runtime.view.setVisible(shouldShow);
     void runtime.view.webContents
-      .executeJavaScript(`window.dispatchEvent(new Event("resize"));`, true)
+      .executeJavaScript(
+        `window.dispatchEvent(new Event("resize")); window.visualViewport?.dispatchEvent?.(new Event("resize"));`,
+        true,
+      )
       .catch(() => undefined);
   }
 
@@ -790,8 +825,34 @@ export class BrowserRuntimeRegistry extends EventEmitter<{
     if (this.attachedProjectId !== projectId) {
       contentView.addChildView(runtime.view);
     }
-    this.applyBounds(runtime, bounds);
+    this.applyBounds(runtime, bounds, { forceViewportRefresh: true });
     this.attachedProjectId = projectId;
+    this.scheduleAttachedBoundsReapply(projectId);
+  }
+
+  private scheduleAttachedBoundsReapply(projectId: ProjectId): void {
+    for (const delayMs of ATTACHED_BOUNDS_REAPPLY_DELAYS_MS) {
+      globalThis.setTimeout(() => {
+        this.reapplyAttachedBounds(projectId);
+      }, delayMs);
+    }
+  }
+
+  private reapplyAttachedBounds(projectId: ProjectId): void {
+    if (
+      !this.window ||
+      !this.paneOpen ||
+      !this.paneBounds ||
+      this.paneProjectId !== projectId ||
+      this.attachedProjectId !== projectId
+    ) {
+      return;
+    }
+    const runtime = this.runtimes.get(projectId);
+    if (!runtime) {
+      return;
+    }
+    this.applyBounds(runtime, this.paneBounds, { forceViewportRefresh: true });
   }
 
   private detachAttachedView(window: BrowserWindow): void {
