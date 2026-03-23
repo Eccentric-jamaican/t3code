@@ -10,6 +10,17 @@ const UPDATE_STATE_CHANNEL = "desktop:update-state";
 const UPDATE_GET_STATE_CHANNEL = "desktop:update-get-state";
 const UPDATE_DOWNLOAD_CHANNEL = "desktop:update-download";
 const UPDATE_INSTALL_CHANNEL = "desktop:update-install";
+const BROWSER_GET_STATE_CHANNEL = "desktop:browser-get-state";
+const BROWSER_OPEN_CHANNEL = "desktop:browser-open";
+const BROWSER_CLOSE_PANE_CHANNEL = "desktop:browser-close-pane";
+const BROWSER_NAVIGATE_CHANNEL = "desktop:browser-navigate";
+const BROWSER_BACK_CHANNEL = "desktop:browser-back";
+const BROWSER_FORWARD_CHANNEL = "desktop:browser-forward";
+const BROWSER_RELOAD_CHANNEL = "desktop:browser-reload";
+const BROWSER_KILL_CHANNEL = "desktop:browser-kill";
+const BROWSER_SET_INSPECT_MODE_CHANNEL = "desktop:browser-set-inspect-mode";
+const BROWSER_CAPTURE_INSPECT_SELECTION_CHANNEL = "desktop:browser-capture-inspect-selection";
+const BROWSER_EVENT_CHANNEL = "desktop:browser-event";
 const wsUrl = process.env.T3CODE_DESKTOP_WS_URL ?? null;
 
 contextBridge.exposeInMainWorld("desktopBridge", {
@@ -42,5 +53,29 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     return () => {
       ipcRenderer.removeListener(UPDATE_STATE_CHANNEL, wrappedListener);
     };
+  },
+  browser: {
+    getState: (input) => ipcRenderer.invoke(BROWSER_GET_STATE_CHANNEL, input),
+    open: (input) => ipcRenderer.invoke(BROWSER_OPEN_CHANNEL, input),
+    closePane: () => ipcRenderer.invoke(BROWSER_CLOSE_PANE_CHANNEL),
+    navigate: (input) => ipcRenderer.invoke(BROWSER_NAVIGATE_CHANNEL, input),
+    back: (input) => ipcRenderer.invoke(BROWSER_BACK_CHANNEL, input),
+    forward: (input) => ipcRenderer.invoke(BROWSER_FORWARD_CHANNEL, input),
+    reload: (input) => ipcRenderer.invoke(BROWSER_RELOAD_CHANNEL, input),
+    kill: (input) => ipcRenderer.invoke(BROWSER_KILL_CHANNEL, input),
+    setInspectMode: (input) => ipcRenderer.invoke(BROWSER_SET_INSPECT_MODE_CHANNEL, input),
+    captureInspectSelection: (input) =>
+      ipcRenderer.invoke(BROWSER_CAPTURE_INSPECT_SELECTION_CHANNEL, input),
+    onEvent: (listener) => {
+      const wrappedListener = (_event: Electron.IpcRendererEvent, payload: unknown) => {
+        if (typeof payload !== "object" || payload === null) return;
+        listener(payload as Parameters<typeof listener>[0]);
+      };
+
+      ipcRenderer.on(BROWSER_EVENT_CHANNEL, wrappedListener);
+      return () => {
+        ipcRenderer.removeListener(BROWSER_EVENT_CHANNEL, wrappedListener);
+      };
+    },
   },
 } satisfies DesktopBridge);

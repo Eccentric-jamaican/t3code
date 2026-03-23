@@ -117,6 +117,7 @@ import {
   FolderIcon,
   DiffIcon,
   FolderClosedIcon,
+  GlobeIcon,
   KanbanSquareIcon,
   LockIcon,
   LockOpenIcon,
@@ -169,6 +170,7 @@ import { Toggle } from "./ui/toggle";
 import { SidebarInsetTrigger } from "./ui/sidebar";
 import { newCommandId, newMessageId, newThreadId } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
+import { useBrowserPaneStore } from "~/browserPaneStore";
 import {
   getAppModelOptions,
   resolveAppModelSelection,
@@ -505,6 +507,8 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const queryClient = useQueryClient();
   const createWorktreeMutation = useMutation(gitCreateWorktreeMutationOptions({ queryClient }));
   const composerDraft = useComposerThreadDraft(threadId);
+  const browserPaneOpen = useBrowserPaneStore((state) => state.open);
+  const setBrowserPaneOpen = useBrowserPaneStore((state) => state.setOpen);
   const prompt = composerDraft.prompt;
   const composerImages = composerDraft.images;
   const composerPinnedSelections = composerDraft.pinnedSelections;
@@ -3322,6 +3326,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
           keybindings={keybindings}
           availableEditors={availableEditors}
           diffToggleShortcutLabel={diffPanelShortcutLabel}
+          browserPaneOpen={browserPaneOpen}
           gitCwd={gitCwd}
           diffOpen={diffOpen}
           onRunProjectScript={(script) => {
@@ -3343,6 +3348,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
               : null
           }
           onToggleDiff={onToggleDiff}
+          onToggleBrowser={() => setBrowserPaneOpen(!browserPaneOpen)}
         />
       </header>
 
@@ -3918,6 +3924,7 @@ interface ChatHeaderProps {
   keybindings: ResolvedKeybindingsConfig;
   availableEditors: ReadonlyArray<EditorId>;
   diffToggleShortcutLabel: string | null;
+  browserPaneOpen: boolean;
   gitCwd: string | null;
   diffOpen: boolean;
   onRunProjectScript: (script: ProjectScript) => void;
@@ -3925,6 +3932,7 @@ interface ChatHeaderProps {
   onUpdateProjectScript: (scriptId: string, input: NewProjectScriptInput) => Promise<void>;
   onOpenTask: (() => void) | null;
   onToggleDiff: () => void;
+  onToggleBrowser: () => void;
 }
 
 const ChatHeader = memo(function ChatHeader({
@@ -3938,6 +3946,7 @@ const ChatHeader = memo(function ChatHeader({
   keybindings,
   availableEditors,
   diffToggleShortcutLabel,
+  browserPaneOpen,
   gitCwd,
   diffOpen,
   onRunProjectScript,
@@ -3945,6 +3954,7 @@ const ChatHeader = memo(function ChatHeader({
   onUpdateProjectScript,
   onOpenTask,
   onToggleDiff,
+  onToggleBrowser,
 }: ChatHeaderProps) {
   return (
     <div className="flex min-w-0 flex-1 items-center gap-2">
@@ -3993,6 +4003,25 @@ const ChatHeader = memo(function ChatHeader({
           </Button>
         ) : null}
         {activeProjectName && <GitActionsControl gitCwd={gitCwd} activeThreadId={activeThreadId} />}
+        {isElectron ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Toggle
+                  className="shrink-0"
+                  pressed={browserPaneOpen}
+                  onPressedChange={onToggleBrowser}
+                  aria-label="Toggle browser pane"
+                  variant="outline"
+                  size="xs"
+                >
+                  <GlobeIcon className="size-3" />
+                </Toggle>
+              }
+            />
+            <TooltipPopup side="bottom">Toggle browser pane</TooltipPopup>
+          </Tooltip>
+        ) : null}
         <Tooltip>
           <TooltipTrigger
             render={

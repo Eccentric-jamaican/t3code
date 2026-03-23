@@ -56,6 +56,10 @@ const decodeAndWarnOnFailure = <T>(
   return decoded.value;
 };
 
+function desktopBrowserUnavailable(): never {
+  throw new Error("Integrated browser is only available in the desktop app.");
+}
+
 /**
  * Subscribe to the server welcome message. If a welcome was already received
  * before this call, the listener fires synchronously with the cached payload.
@@ -270,6 +274,74 @@ export function createWsNativeApi(): NativeApi {
           const payload = decodeAndWarnOnFailure(OrchestrationEvent, data);
           if (payload) callback(payload);
         }),
+    },
+    browser: {
+      getState: async (input) => {
+        if (!window.desktopBridge?.browser) {
+          return desktopBrowserUnavailable();
+        }
+        return window.desktopBridge.browser.getState(input);
+      },
+      open: async (input) => {
+        if (!window.desktopBridge?.browser) {
+          return desktopBrowserUnavailable();
+        }
+        return window.desktopBridge.browser.open(input);
+      },
+      closePane: async () => {
+        if (!window.desktopBridge?.browser) {
+          return desktopBrowserUnavailable();
+        }
+        return window.desktopBridge.browser.closePane();
+      },
+      navigate: async (input) => {
+        if (!window.desktopBridge?.browser) {
+          return desktopBrowserUnavailable();
+        }
+        return window.desktopBridge.browser.navigate(input);
+      },
+      back: async (input) => {
+        if (!window.desktopBridge?.browser) {
+          return desktopBrowserUnavailable();
+        }
+        return window.desktopBridge.browser.back(input);
+      },
+      forward: async (input) => {
+        if (!window.desktopBridge?.browser) {
+          return desktopBrowserUnavailable();
+        }
+        return window.desktopBridge.browser.forward(input);
+      },
+      reload: async (input) => {
+        if (!window.desktopBridge?.browser) {
+          return desktopBrowserUnavailable();
+        }
+        return window.desktopBridge.browser.reload(input);
+      },
+      kill: async (input) => {
+        if (!window.desktopBridge?.browser) {
+          return desktopBrowserUnavailable();
+        }
+        return window.desktopBridge.browser.kill(input);
+      },
+      setInspectMode: async (input) => {
+        if (!window.desktopBridge?.browser) {
+          return desktopBrowserUnavailable();
+        }
+        return window.desktopBridge.browser.setInspectMode(input);
+      },
+      captureInspectSelection: async (input) => {
+        if (!window.desktopBridge?.browser) {
+          return desktopBrowserUnavailable();
+        }
+        return window.desktopBridge.browser.captureInspectSelection(input);
+      },
+      onEvent: (callback) => {
+        if (!window.desktopBridge?.browser) {
+          return () => {};
+        }
+        return window.desktopBridge.browser.onEvent(callback);
+      },
     },
   };
 

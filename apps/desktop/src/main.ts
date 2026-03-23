@@ -1,13 +1,21 @@
 import * as ChildProcess from "node:child_process";
 import * as Crypto from "node:crypto";
 import * as FS from "node:fs";
+import * as Http from "node:http";
 import * as OS from "node:os";
 import * as Path from "node:path";
 
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, protocol, shell } from "electron";
 import type { MenuItemConstructorOptions } from "electron";
 import * as Effect from "effect/Effect";
-import type { DesktopUpdateActionResult, DesktopUpdateState } from "@t3tools/contracts";
+import type {
+  BrowserInspectCapture,
+  BrowserPaneBounds,
+  BrowserRuntimeEvent,
+  DesktopUpdateActionResult,
+  DesktopUpdateState,
+  ProjectId,
+} from "@t3tools/contracts";
 import { autoUpdater } from "electron-updater";
 
 import type { ContextMenuItem } from "@t3tools/contracts";
@@ -18,6 +26,7 @@ import {
   getAppDisplayName,
 } from "@t3tools/shared/branding";
 import { RotatingFileSink } from "@t3tools/shared/logging";
+import { BrowserRuntimeRegistry } from "./browserRuntime";
 import { showDesktopConfirmDialog } from "./confirmDialog";
 import { fixPath } from "./fixPath";
 import {
@@ -50,6 +59,18 @@ const UPDATE_STATE_CHANNEL = "desktop:update-state";
 const UPDATE_GET_STATE_CHANNEL = "desktop:update-get-state";
 const UPDATE_DOWNLOAD_CHANNEL = "desktop:update-download";
 const UPDATE_INSTALL_CHANNEL = "desktop:update-install";
+const BROWSER_GET_STATE_CHANNEL = "desktop:browser-get-state";
+const BROWSER_OPEN_CHANNEL = "desktop:browser-open";
+const BROWSER_CLOSE_PANE_CHANNEL = "desktop:browser-close-pane";
+const BROWSER_NAVIGATE_CHANNEL = "desktop:browser-navigate";
+const BROWSER_BACK_CHANNEL = "desktop:browser-back";
+const BROWSER_FORWARD_CHANNEL = "desktop:browser-forward";
+const BROWSER_RELOAD_CHANNEL = "desktop:browser-reload";
+const BROWSER_KILL_CHANNEL = "desktop:browser-kill";
+const BROWSER_SET_INSPECT_MODE_CHANNEL = "desktop:browser-set-inspect-mode";
+const BROWSER_CAPTURE_INSPECT_SELECTION_CHANNEL = "desktop:browser-capture-inspect-selection";
+const BROWSER_EVENT_CHANNEL = "desktop:browser-event";
+const BROWSER_PAGE_EVENT_CHANNEL = "desktop:browser-page-event";
 const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
 const APP_DISPLAY_NAME = getAppDisplayName(isDevelopment);
 const STATE_DIR = resolveDesktopStateDir(process.env.T3CODE_STATE_DIR);
@@ -78,6 +99,9 @@ let backendProcess: ChildProcess.ChildProcess | null = null;
 let backendPort = 0;
 let backendAuthToken = "";
 let backendWsUrl = "";
+let browserBridgeServer: Http.Server | null = null;
+let browserBridgeUrl = "";
+let browserBridgeAuthToken = "";
 let restartAttempt = 0;
 let restartTimer: ReturnType<typeof setTimeout> | null = null;
 let isQuitting = false;
@@ -88,7 +112,18 @@ let backendLogSink: RotatingFileSink | null = null;
 let restoreStdIoCapture: (() => void) | null = null;
 
 let destructiveMenuIconCache: Electron.NativeImage | null | undefined;
+const browserRuntimeRegistry = new BrowserRuntimeRegistry({
+  browserPreloadPath: Path.join(__dirname, "browserPreload.js"),
+});
 const initialUpdateState = (): DesktopUpdateState => createInitialDesktopUpdateState(app.getVersion());
+
+function emitBrowserEvent(event: BrowserRuntimeEvent): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    window.webContents.send(BROWSER_EVENT_CHANNEL, event);
+  }
+}
+
+browserRuntimeRegistry.on("event", emitBrowserEvent);
 
 app.setPath("userData", ELECTRON_USER_DATA_DIR);
 app.setPath("sessionData", Path.join(ELECTRON_USER_DATA_DIR, "session"));
@@ -99,6 +134,195 @@ function logTimestamp(): string {
 
 function logScope(scope: string): string {
   return `${scope} run=${APP_RUN_ID}`;
+}
+
+function asProjectId(value: unknown): ProjectId {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error("projectId must be a non-empty string.");
+  }
+  return value as ProjectId;
+}
+
+function asPaneBounds(value: unknown): BrowserPaneBounds {
+  if (!value || typeof value !== "object") {
+    throw new Error("bounds must be an object.");
+  }
+  const candidate = value as Record<string, unknown>;
+  const x = Number(candidate.x);
+  const y = Number(candidate.y);
+  const width = Number(candidate.width);
+  const height = Number(candidate.height);
+  if (![x, y, width, height].every(Number.isFinite)) {
+    throw new Error("bounds must contain finite numbers.");
+  }
+  return {
+    x: Math.max(0, Math.round(x)),
+    y: Math.max(0, Math.round(y)),
+    width: Math.max(0, Math.round(width)),
+    height: Math.max(0, Math.round(height)),
+  };
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Expected an object payload.");
+  }
+  return value as Record<string, unknown>;
+}
+
+async function readRequestBody(request: Http.IncomingMessage): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of request) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  if (chunks.length === 0) {
+    return {};
+  }
+  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+}
+
+async function handleBrowserBridgeRequest(body: unknown): Promise<unknown> {
+  const record = asRecord(body);
+  const method = record.method;
+  const params = record.params;
+  if (typeof method !== "string" || method.length === 0) {
+    throw new Error("method must be a non-empty string.");
+  }
+  const input = params === undefined ? {} : asRecord(params);
+  switch (method) {
+    case "browser.ensure":
+      return browserRuntimeRegistry.ensure(asProjectId(input.projectId));
+    case "browser.show":
+      await browserRuntimeRegistry.requestPane(asProjectId(input.projectId));
+      return browserRuntimeRegistry.getState(asProjectId(input.projectId));
+    case "browser.kill":
+      await browserRuntimeRegistry.kill(asProjectId(input.projectId));
+      return {};
+    case "browser.navigate":
+      if (typeof input.url !== "string" || input.url.trim().length === 0) {
+        throw new Error("url must be a non-empty string.");
+      }
+      return browserRuntimeRegistry.navigate(asProjectId(input.projectId), input.url);
+    case "browser.back":
+      return browserRuntimeRegistry.back(asProjectId(input.projectId));
+    case "browser.forward":
+      return browserRuntimeRegistry.forward(asProjectId(input.projectId));
+    case "browser.reload":
+      return browserRuntimeRegistry.reload(asProjectId(input.projectId));
+    case "browser.snapshot":
+      return browserRuntimeRegistry.snapshot(asProjectId(input.projectId));
+    case "browser.screenshot":
+      return { dataUrl: await browserRuntimeRegistry.screenshot(asProjectId(input.projectId)) };
+    case "browser.wait_for":
+      return {
+        matched: await browserRuntimeRegistry.waitFor(asProjectId(input.projectId), {
+          ...(typeof input.selector === "string" ? { selector: input.selector } : {}),
+          ...(typeof input.text === "string" ? { text: input.text } : {}),
+          ...(typeof input.timeoutMs === "number" && Number.isFinite(input.timeoutMs)
+            ? { timeoutMs: input.timeoutMs }
+            : {}),
+        }),
+      };
+    case "browser.click":
+      if (typeof input.selector !== "string" || input.selector.trim().length === 0) {
+        throw new Error("selector must be a non-empty string.");
+      }
+      await browserRuntimeRegistry.click(asProjectId(input.projectId), input.selector);
+      return {};
+    case "browser.hover":
+      if (typeof input.selector !== "string" || input.selector.trim().length === 0) {
+        throw new Error("selector must be a non-empty string.");
+      }
+      await browserRuntimeRegistry.hover(asProjectId(input.projectId), input.selector);
+      return {};
+    case "browser.fill":
+      if (typeof input.selector !== "string" || typeof input.value !== "string") {
+        throw new Error("selector and value must be strings.");
+      }
+      await browserRuntimeRegistry.fill(asProjectId(input.projectId), {
+        selector: input.selector,
+        value: input.value,
+      });
+      return {};
+    case "browser.type_text":
+      if (typeof input.selector !== "string" || typeof input.text !== "string") {
+        throw new Error("selector and text must be strings.");
+      }
+      await browserRuntimeRegistry.typeText(asProjectId(input.projectId), {
+        selector: input.selector,
+        text: input.text,
+      });
+      return {};
+    case "browser.press_key":
+      if (typeof input.key !== "string" || input.key.trim().length === 0) {
+        throw new Error("key must be a non-empty string.");
+      }
+      await browserRuntimeRegistry.pressKey(asProjectId(input.projectId), input.key);
+      return {};
+    case "browser.evaluate":
+      if (typeof input.expression !== "string" || input.expression.trim().length === 0) {
+        throw new Error("expression must be a non-empty string.");
+      }
+      return { value: await browserRuntimeRegistry.evaluate(asProjectId(input.projectId), input.expression) };
+    default:
+      throw new Error(`Unknown browser bridge method '${method}'.`);
+  }
+}
+
+async function startBrowserBridgeServer(): Promise<void> {
+  if (browserBridgeServer) {
+    return;
+  }
+  browserBridgeAuthToken = Crypto.randomBytes(24).toString("hex");
+  const server = Http.createServer(async (request, response) => {
+    try {
+      if (request.method !== "POST" || request.url !== "/rpc") {
+        response.writeHead(404).end();
+        return;
+      }
+      if (request.headers["x-t3-browser-token"] !== browserBridgeAuthToken) {
+        response.writeHead(401).end(JSON.stringify({ error: "Unauthorized" }));
+        return;
+      }
+      const body = await readRequestBody(request);
+      const result = await handleBrowserBridgeRequest(body);
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ result }));
+    } catch (error) {
+      response.writeHead(500, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
+    }
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    server.close();
+    throw new Error("Could not resolve browser bridge server address.");
+  }
+  browserBridgeServer = server;
+  browserBridgeUrl = `http://127.0.0.1:${address.port}/rpc`;
+  server.unref();
+}
+
+function stopBrowserBridgeServer(): void {
+  if (!browserBridgeServer) {
+    return;
+  }
+  browserBridgeServer.close();
+  browserBridgeServer = null;
+  browserBridgeUrl = "";
+  browserBridgeAuthToken = "";
 }
 
 function sanitizeLogValue(value: string): string {
@@ -817,6 +1041,8 @@ function backendEnv(): NodeJS.ProcessEnv {
     T3CODE_PORT: String(backendPort),
     T3CODE_STATE_DIR: STATE_DIR,
     T3CODE_AUTH_TOKEN: backendAuthToken,
+    T3CODE_DESKTOP_BROWSER_BRIDGE_URL: browserBridgeUrl,
+    T3CODE_DESKTOP_BROWSER_BRIDGE_TOKEN: browserBridgeAuthToken,
   };
 }
 
@@ -1102,6 +1328,79 @@ function registerIpcHandlers(): void {
       state: updateState,
     } satisfies DesktopUpdateActionResult;
   });
+
+  ipcMain.removeHandler(BROWSER_GET_STATE_CHANNEL);
+  ipcMain.handle(BROWSER_GET_STATE_CHANNEL, async (_event, rawInput: unknown) =>
+    browserRuntimeRegistry.getState(asProjectId(asRecord(rawInput).projectId)),
+  );
+
+  ipcMain.removeHandler(BROWSER_OPEN_CHANNEL);
+  ipcMain.handle(BROWSER_OPEN_CHANNEL, async (_event, rawInput: unknown) => {
+    const input = asRecord(rawInput);
+    return browserRuntimeRegistry.open(asProjectId(input.projectId), asPaneBounds(input.bounds));
+  });
+
+  ipcMain.removeHandler(BROWSER_CLOSE_PANE_CHANNEL);
+  ipcMain.handle(BROWSER_CLOSE_PANE_CHANNEL, async () => {
+    await browserRuntimeRegistry.closePane();
+  });
+
+  ipcMain.removeHandler(BROWSER_NAVIGATE_CHANNEL);
+  ipcMain.handle(BROWSER_NAVIGATE_CHANNEL, async (_event, rawInput: unknown) => {
+    const input = asRecord(rawInput);
+    if (typeof input.url !== "string" || input.url.trim().length === 0) {
+      throw new Error("url must be a non-empty string.");
+    }
+    return browserRuntimeRegistry.navigate(asProjectId(input.projectId), input.url);
+  });
+
+  ipcMain.removeHandler(BROWSER_BACK_CHANNEL);
+  ipcMain.handle(BROWSER_BACK_CHANNEL, async (_event, rawInput: unknown) =>
+    browserRuntimeRegistry.back(asProjectId(asRecord(rawInput).projectId)),
+  );
+
+  ipcMain.removeHandler(BROWSER_FORWARD_CHANNEL);
+  ipcMain.handle(BROWSER_FORWARD_CHANNEL, async (_event, rawInput: unknown) =>
+    browserRuntimeRegistry.forward(asProjectId(asRecord(rawInput).projectId)),
+  );
+
+  ipcMain.removeHandler(BROWSER_RELOAD_CHANNEL);
+  ipcMain.handle(BROWSER_RELOAD_CHANNEL, async (_event, rawInput: unknown) =>
+    browserRuntimeRegistry.reload(asProjectId(asRecord(rawInput).projectId)),
+  );
+
+  ipcMain.removeHandler(BROWSER_KILL_CHANNEL);
+  ipcMain.handle(BROWSER_KILL_CHANNEL, async (_event, rawInput: unknown) => {
+    await browserRuntimeRegistry.kill(asProjectId(asRecord(rawInput).projectId));
+  });
+
+  ipcMain.removeHandler(BROWSER_SET_INSPECT_MODE_CHANNEL);
+  ipcMain.handle(BROWSER_SET_INSPECT_MODE_CHANNEL, async (_event, rawInput: unknown) => {
+    const input = asRecord(rawInput);
+    return browserRuntimeRegistry.setInspectMode(
+      asProjectId(input.projectId),
+      input.enabled === true,
+    );
+  });
+
+  ipcMain.removeHandler(BROWSER_CAPTURE_INSPECT_SELECTION_CHANNEL);
+  ipcMain.handle(
+    BROWSER_CAPTURE_INSPECT_SELECTION_CHANNEL,
+    async (_event, rawInput: unknown): Promise<BrowserInspectCapture | null> =>
+      browserRuntimeRegistry.captureInspectSelection(asProjectId(asRecord(rawInput).projectId)),
+  );
+
+  ipcMain.removeAllListeners(BROWSER_PAGE_EVENT_CHANNEL);
+  ipcMain.on(BROWSER_PAGE_EVENT_CHANNEL, (event, rawPayload: unknown) => {
+    const projectId = browserRuntimeRegistry.findProjectIdByWebContentsId(event.sender.id);
+    if (!projectId) {
+      return;
+    }
+    if (!rawPayload || typeof rawPayload !== "object") {
+      return;
+    }
+    browserRuntimeRegistry.handlePageEvent(projectId, rawPayload as { type: string; hasSelection?: unknown });
+  });
 }
 
 function getIconOption(): { icon: string } | Record<string, never> {
@@ -1153,9 +1452,14 @@ function createWindow(): BrowserWindow {
 
   window.on("closed", () => {
     if (mainWindow === window) {
+      browserRuntimeRegistry.setWindow(null);
+    }
+    if (mainWindow === window) {
       mainWindow = null;
     }
   });
+
+  browserRuntimeRegistry.setWindow(window);
 
   return window;
 }
@@ -1173,6 +1477,7 @@ async function bootstrap(): Promise<void> {
   backendAuthToken = Crypto.randomBytes(24).toString("hex");
   backendWsUrl = `ws://127.0.0.1:${backendPort}/?token=${encodeURIComponent(backendAuthToken)}`;
   process.env.T3CODE_DESKTOP_WS_URL = backendWsUrl;
+  await startBrowserBridgeServer();
   writeDesktopLogHeader(`bootstrap resolved websocket url=${backendWsUrl}`);
 
   registerIpcHandlers();
@@ -1187,6 +1492,7 @@ app.on("before-quit", () => {
   isQuitting = true;
   writeDesktopLogHeader("before-quit received");
   clearUpdatePollTimer();
+  stopBrowserBridgeServer();
   stopBackend();
   restoreStdIoCapture?.();
 });
@@ -1225,6 +1531,7 @@ if (process.platform !== "win32") {
     isQuitting = true;
     writeDesktopLogHeader("SIGINT received");
     clearUpdatePollTimer();
+    stopBrowserBridgeServer();
     stopBackend();
     restoreStdIoCapture?.();
     app.quit();
@@ -1235,6 +1542,7 @@ if (process.platform !== "win32") {
     isQuitting = true;
     writeDesktopLogHeader("SIGTERM received");
     clearUpdatePollTimer();
+    stopBrowserBridgeServer();
     stopBackend();
     restoreStdIoCapture?.();
     app.quit();

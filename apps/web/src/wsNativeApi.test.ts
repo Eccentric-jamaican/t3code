@@ -628,4 +628,74 @@ describe("wsNativeApi", () => {
       { x: 20, y: 30 },
     );
   });
+
+  it("forwards browser actions to the desktop bridge when available", async () => {
+    const browserBridge = {
+      getState: vi.fn().mockResolvedValue({ session: null }),
+      open: vi.fn().mockResolvedValue({ session: null }),
+      closePane: vi.fn().mockResolvedValue(undefined),
+      navigate: vi.fn().mockResolvedValue({ session: null }),
+      back: vi.fn().mockResolvedValue({ session: null }),
+      forward: vi.fn().mockResolvedValue({ session: null }),
+      reload: vi.fn().mockResolvedValue({ session: null }),
+      kill: vi.fn().mockResolvedValue(undefined),
+      setInspectMode: vi.fn().mockResolvedValue({ session: null }),
+      captureInspectSelection: vi.fn().mockResolvedValue(null),
+      onEvent: vi.fn().mockReturnValue(() => {}),
+    };
+    Object.defineProperty(getWindowForTest(), "desktopBridge", {
+      configurable: true,
+      writable: true,
+      value: {
+        browser: browserBridge,
+      },
+    });
+
+    const { createWsNativeApi } = await import("./wsNativeApi");
+    const api = createWsNativeApi();
+
+    await api.browser.getState({ projectId: ProjectId.makeUnsafe("project-1") });
+    await api.browser.open({
+      projectId: ProjectId.makeUnsafe("project-1"),
+      bounds: { x: 10, y: 20, width: 300, height: 200 },
+    });
+    await api.browser.navigate({
+      projectId: ProjectId.makeUnsafe("project-1"),
+      url: "http://localhost:3000",
+    });
+    await api.browser.setInspectMode({
+      projectId: ProjectId.makeUnsafe("project-1"),
+      enabled: true,
+    });
+    const unsubscribe = api.browser.onEvent(vi.fn());
+    await api.browser.closePane();
+
+    expect(browserBridge.getState).toHaveBeenCalledWith({ projectId: "project-1" });
+    expect(browserBridge.open).toHaveBeenCalledWith({
+      projectId: "project-1",
+      bounds: { x: 10, y: 20, width: 300, height: 200 },
+    });
+    expect(browserBridge.navigate).toHaveBeenCalledWith({
+      projectId: "project-1",
+      url: "http://localhost:3000",
+    });
+    expect(browserBridge.setInspectMode).toHaveBeenCalledWith({
+      projectId: "project-1",
+      enabled: true,
+    });
+    expect(browserBridge.onEvent).toHaveBeenCalledTimes(1);
+    expect(browserBridge.closePane).toHaveBeenCalledTimes(1);
+    expect(typeof unsubscribe).toBe("function");
+  });
+
+  it("throws for browser actions when the desktop bridge is unavailable", async () => {
+    Reflect.deleteProperty(getWindowForTest(), "desktopBridge");
+
+    const { createWsNativeApi } = await import("./wsNativeApi");
+    const api = createWsNativeApi();
+
+    await expect(
+      api.browser.getState({ projectId: ProjectId.makeUnsafe("project-1") }),
+    ).rejects.toThrow("Integrated browser is only available in the desktop app.");
+  });
 });

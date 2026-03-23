@@ -15,6 +15,15 @@ import type {
   GitStatusResult,
 } from "./git";
 import type {
+  BrowserInspectCapture,
+  BrowserNavigateInput,
+  BrowserOpenInput,
+  BrowserProjectInput,
+  BrowserRuntimeEvent,
+  BrowserSessionSnapshot,
+  BrowserSetInspectModeInput,
+} from "./browser";
+import type {
   ProjectSearchEntriesInput,
   ProjectSearchEntriesResult,
   ProjectWriteFileInput,
@@ -107,6 +116,19 @@ export interface DesktopBridge {
   downloadUpdate: () => Promise<DesktopUpdateActionResult>;
   installUpdate: () => Promise<DesktopUpdateActionResult>;
   onUpdateState: (listener: (state: DesktopUpdateState) => void) => () => void;
+  browser: {
+    getState: (input: BrowserProjectInput) => Promise<BrowserSessionSnapshot>;
+    open: (input: BrowserOpenInput) => Promise<BrowserSessionSnapshot>;
+    closePane: () => Promise<void>;
+    navigate: (input: BrowserNavigateInput) => Promise<BrowserSessionSnapshot>;
+    back: (input: BrowserProjectInput) => Promise<BrowserSessionSnapshot>;
+    forward: (input: BrowserProjectInput) => Promise<BrowserSessionSnapshot>;
+    reload: (input: BrowserProjectInput) => Promise<BrowserSessionSnapshot>;
+    kill: (input: BrowserProjectInput) => Promise<void>;
+    setInspectMode: (input: BrowserSetInspectModeInput) => Promise<BrowserSessionSnapshot>;
+    captureInspectSelection: (input: BrowserProjectInput) => Promise<BrowserInspectCapture | null>;
+    onEvent: (listener: (event: BrowserRuntimeEvent) => void) => () => void;
+  };
 }
 
 export interface NativeApi {
@@ -181,5 +203,18 @@ export interface NativeApi {
     ) => Promise<OrchestrationGetFullThreadDiffResult>;
     replayEvents: (fromSequenceExclusive: number) => Promise<OrchestrationEvent[]>;
     onDomainEvent: (callback: (event: OrchestrationEvent) => void) => () => void;
+  };
+  browser: {
+    getState: (input: BrowserProjectInput) => Promise<BrowserSessionSnapshot>;
+    open: (input: BrowserOpenInput) => Promise<BrowserSessionSnapshot>;
+    closePane: () => Promise<void>;
+    navigate: (input: BrowserNavigateInput) => Promise<BrowserSessionSnapshot>;
+    back: (input: BrowserProjectInput) => Promise<BrowserSessionSnapshot>;
+    forward: (input: BrowserProjectInput) => Promise<BrowserSessionSnapshot>;
+    reload: (input: BrowserProjectInput) => Promise<BrowserSessionSnapshot>;
+    kill: (input: BrowserProjectInput) => Promise<void>;
+    setInspectMode: (input: BrowserSetInspectModeInput) => Promise<BrowserSessionSnapshot>;
+    captureInspectSelection: (input: BrowserProjectInput) => Promise<BrowserInspectCapture | null>;
+    onEvent: (callback: (event: BrowserRuntimeEvent) => void) => () => void;
   };
 }
