@@ -24,8 +24,16 @@ import type {
   ServerCancelProviderLoginInput,
   ServerCancelProviderLoginResult,
   ServerConfig,
+  ServerErrorInboxUpdatedPayload,
+  ServerGetErrorInboxResult,
   ServerLogoutProviderInput,
   ServerLogoutProviderResult,
+  ServerPromoteErrorInboxEntryToTaskInput,
+  ServerPromoteErrorInboxEntryToTaskResult,
+  ServerReportClientDiagnosticInput,
+  ServerReportClientDiagnosticResult,
+  ServerSetErrorInboxEntryResolutionInput,
+  ServerSetErrorInboxEntryResolutionResult,
   ServerStartProviderLoginInput,
   ServerStartProviderLoginResult,
 } from "./server";
@@ -144,6 +152,16 @@ export interface NativeApi {
   };
   server: {
     getConfig: () => Promise<ServerConfig>;
+    getErrorInbox: () => Promise<ServerGetErrorInboxResult>;
+    reportClientDiagnostic: (
+      input: ServerReportClientDiagnosticInput,
+    ) => Promise<ServerReportClientDiagnosticResult>;
+    setErrorInboxEntryResolution: (
+      input: ServerSetErrorInboxEntryResolutionInput,
+    ) => Promise<ServerSetErrorInboxEntryResolutionResult>;
+    promoteErrorInboxEntryToTask: (
+      input: ServerPromoteErrorInboxEntryToTaskInput,
+    ) => Promise<ServerPromoteErrorInboxEntryToTaskResult>;
     upsertKeybinding: (input: ServerUpsertKeybindingInput) => Promise<ServerUpsertKeybindingResult>;
     startProviderLogin: (
       input: ServerStartProviderLoginInput,
@@ -152,6 +170,7 @@ export interface NativeApi {
       input: ServerCancelProviderLoginInput,
     ) => Promise<ServerCancelProviderLoginResult>;
     logoutProvider: (input: ServerLogoutProviderInput) => Promise<ServerLogoutProviderResult>;
+    onErrorInboxUpdated: (callback: (payload: ServerErrorInboxUpdatedPayload) => void) => () => void;
   };
   orchestration: {
     getSnapshot: () => Promise<OrchestrationReadModel>;

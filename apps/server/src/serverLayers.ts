@@ -18,6 +18,8 @@ import { OrchestrationProjectionPipelineLive } from "./orchestration/Layers/Proj
 import { OrchestrationProjectionSnapshotQueryLive } from "./orchestration/Layers/ProjectionSnapshotQuery";
 import { ProviderRuntimeIngestionLive } from "./orchestration/Layers/ProviderRuntimeIngestion";
 import { TaskLifecycleReactorLive } from "./orchestration/Layers/TaskLifecycleReactor";
+import { ErrorInboxRepositoryLive } from "./errorInbox/Layers/ErrorInboxRepository";
+import { ErrorInboxServiceLive } from "./errorInbox/Layers/ErrorInbox";
 import { ProviderUnsupportedError } from "./provider/Errors";
 import { makeCodexAdapterLive } from "./provider/Layers/CodexAdapter";
 import { ProviderAdapterRegistryLive } from "./provider/Layers/ProviderAdapterRegistry";
@@ -68,7 +70,7 @@ export function makeServerProviderLayer(): Layer.Layer<
   }).pipe(Layer.unwrap);
 }
 
-export function makeServerRuntimeServicesLayer() {
+export function makeServerRuntimeCoreLayer() {
   const gitCoreLayer = GitCoreLive.pipe(Layer.provideMerge(GitServiceLive));
   const textGenerationLayer = CodexTextGenerationLive;
 
@@ -82,32 +84,17 @@ export function makeServerRuntimeServicesLayer() {
     Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive),
     Layer.provideMerge(CheckpointStoreLive),
   );
+  const errorInboxLayer = ErrorInboxServiceLive.pipe(
+    Layer.provide(ErrorInboxRepositoryLive),
+    Layer.provide(orchestrationLayer),
+  );
 
   const runtimeServicesLayer = Layer.mergeAll(
     orchestrationLayer,
     OrchestrationProjectionSnapshotQueryLive,
     CheckpointStoreLive,
     checkpointDiffQueryLayer,
-  );
-  const runtimeIngestionLayer = ProviderRuntimeIngestionLive.pipe(
-    Layer.provideMerge(runtimeServicesLayer),
-  );
-  const providerCommandReactorLayer = ProviderCommandReactorLive.pipe(
-    Layer.provideMerge(runtimeServicesLayer),
-    Layer.provideMerge(gitCoreLayer),
-    Layer.provideMerge(textGenerationLayer),
-  );
-  const checkpointReactorLayer = CheckpointReactorLive.pipe(
-    Layer.provideMerge(runtimeServicesLayer),
-  );
-  const taskLifecycleReactorLayer = TaskLifecycleReactorLive.pipe(
-    Layer.provideMerge(runtimeServicesLayer),
-  );
-  const orchestrationReactorLayer = OrchestrationReactorLive.pipe(
-    Layer.provideMerge(runtimeIngestionLayer),
-    Layer.provideMerge(providerCommandReactorLayer),
-    Layer.provideMerge(checkpointReactorLayer),
-    Layer.provideMerge(taskLifecycleReactorLayer),
+    errorInboxLayer,
   );
 
   const terminalLayer = TerminalManagerLive.pipe(
@@ -119,16 +106,47 @@ export function makeServerRuntimeServicesLayer() {
   );
 
   const gitManagerLayer = GitManagerLive.pipe(
-    Layer.provideMerge(gitCoreLayer),
-    Layer.provideMerge(GitHubCliLive),
-    Layer.provideMerge(textGenerationLayer),
+    Layer.provide(gitCoreLayer),
+    Layer.provide(GitHubCliLive),
+    Layer.provide(textGenerationLayer),
   );
 
   return Layer.mergeAll(
-    orchestrationReactorLayer,
+    runtimeServicesLayer,
     gitCoreLayer,
+    textGenerationLayer,
     gitManagerLayer,
     terminalLayer,
     KeybindingsLive,
   ).pipe(Layer.provideMerge(NodeServices.layer));
+}
+
+export function makeServerRuntimeServicesLayer(
+  input?: { coreLayer?: ReturnType<typeof makeServerRuntimeCoreLayer> },
+) {
+  const coreLayer = input?.coreLayer ?? makeServerRuntimeCoreLayer();
+
+  const runtimeIngestionLayer = ProviderRuntimeIngestionLive.pipe(
+    Layer.provide(coreLayer),
+  );
+  const providerCommandReactorLayer = ProviderCommandReactorLive.pipe(
+    Layer.provide(coreLayer),
+  );
+  const checkpointReactorLayer = CheckpointReactorLive.pipe(
+    Layer.provide(coreLayer),
+  );
+  const taskLifecycleReactorLayer = TaskLifecycleReactorLive.pipe(
+    Layer.provide(coreLayer),
+  );
+  const orchestrationReactorLayer = OrchestrationReactorLive.pipe(
+    Layer.provide(runtimeIngestionLayer),
+    Layer.provide(providerCommandReactorLayer),
+    Layer.provide(checkpointReactorLayer),
+    Layer.provide(taskLifecycleReactorLayer),
+  );
+
+  return Layer.mergeAll(
+    coreLayer,
+    orchestrationReactorLayer,
+  );
 }

@@ -3,6 +3,18 @@ import { IsoDateTime, TrimmedNonEmptyString } from "./baseSchemas";
 import { KeybindingRule, ResolvedKeybindingsConfig } from "./keybindings";
 import { EditorId } from "./editor";
 import { ProviderKind } from "./orchestration";
+import {
+  ErrorInboxEntry,
+  ServerErrorInboxUpdatedPayload,
+  ServerGetErrorInboxInput,
+  ServerGetErrorInboxResult,
+  ServerPromoteErrorInboxEntryToTaskInput,
+  ServerPromoteErrorInboxEntryToTaskResult,
+  ServerReportClientDiagnosticInput,
+  ServerReportClientDiagnosticResult,
+  ServerSetErrorInboxEntryResolutionInput,
+  ServerSetErrorInboxEntryResolutionResult,
+} from "./errorInbox";
 
 const KeybindingsMalformedConfigIssue = Schema.Struct({
   kind: Schema.Literal("keybindings.malformed-config"),
@@ -187,3 +199,16 @@ export const ServerProviderStateUpdatedPayload = Schema.Struct({
   providerAccounts: ServerProviderAccounts,
 });
 export type ServerProviderStateUpdatedPayload = typeof ServerProviderStateUpdatedPayload.Type;
+
+export {
+  ErrorInboxEntry,
+  ServerErrorInboxUpdatedPayload,
+  ServerGetErrorInboxInput,
+  ServerGetErrorInboxResult,
+  ServerPromoteErrorInboxEntryToTaskInput,
+  ServerPromoteErrorInboxEntryToTaskResult,
+  ServerReportClientDiagnosticInput,
+  ServerReportClientDiagnosticResult,
+  ServerSetErrorInboxEntryResolutionInput,
+  ServerSetErrorInboxEntryResolutionResult,
+};

@@ -20,6 +20,7 @@ import {
   ORCHESTRATION_WS_METHODS,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   ProjectId,
+  type ServerErrorInboxUpdatedPayload,
   ThreadId,
   TerminalEvent,
   type UploadChatAttachment,
@@ -77,6 +78,7 @@ import {
 } from "./attachmentStore.ts";
 import { parseBase64DataUrl } from "./imageMime.ts";
 import { AnalyticsService } from "./telemetry/Services/AnalyticsService.ts";
+import { ErrorInboxService } from "./errorInbox/Services/ErrorInbox.ts";
 
 /**
  * ServerShape - Service API for server lifecycle control.
@@ -255,7 +257,8 @@ export type ServerCoreRuntimeServices =
   | CheckpointDiffQuery
   | OrchestrationReactor
   | ProviderService
-  | ProviderHealth;
+  | ProviderHealth
+  | ErrorInboxService;
 
 export type ServerRuntimeServices =
   | ServerCoreRuntimeServices
@@ -681,6 +684,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   const projectionReadModelQuery = yield* ProjectionSnapshotQuery;
   const checkpointDiffQuery = yield* CheckpointDiffQuery;
   const orchestrationReactor = yield* OrchestrationReactor;
+  const errorInbox = yield* ErrorInboxService;
   const { openInEditor } = yield* Open;
 
   const subscriptionsScope = yield* Scope.make("sequential");
@@ -720,6 +724,14 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
           providerAccounts,
         },
       });
+    }),
+  ).pipe(Effect.forkIn(subscriptionsScope));
+
+  yield* Stream.runForEach(errorInbox.updates, (payload) =>
+    broadcastPush({
+      type: "push",
+      channel: WS_CHANNELS.serverErrorInboxUpdated,
+      data: payload satisfies ServerErrorInboxUpdatedPayload,
     }),
   ).pipe(Effect.forkIn(subscriptionsScope));
 
@@ -973,6 +985,41 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
           availableEditors,
         };
 
+      case WS_METHODS.serverGetErrorInbox:
+        return yield* errorInbox.listEntries();
+
+      case WS_METHODS.serverReportClientDiagnostic: {
+        const body = stripRequestTag(request.body);
+        const entry = yield* errorInbox.capture({
+          source: body.source,
+          category: body.category,
+          severity: body.severity,
+          summary: body.summary,
+          detail: body.detail ?? null,
+          projectId: body.projectId ?? null,
+          threadId: body.threadId ?? null,
+          turnId: body.turnId ?? null,
+          provider: body.provider ?? null,
+          context: body.context ?? {},
+          ...(body.occurredAt !== undefined ? { occurredAt: body.occurredAt } : {}),
+        });
+        return { entry };
+      }
+
+      case WS_METHODS.serverSetErrorInboxEntryResolution: {
+        const body = stripRequestTag(request.body);
+        const entry = yield* errorInbox.setResolution(body.entryId, body.resolution);
+        return { entry };
+      }
+
+      case WS_METHODS.serverPromoteErrorInboxEntryToTask: {
+        const body = stripRequestTag(request.body);
+        return yield* errorInbox.promoteToTask({
+          entryId: body.entryId,
+          projectId: body.projectId ?? null,
+        });
+      }
+
       case WS_METHODS.serverUpsertKeybinding: {
         const body = stripRequestTag(request.body);
         const keybindingsConfig = yield* keybindingsManager.upsertKeybindingRule(body);
@@ -1106,7 +1153,21 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
     ws.on("message", (raw) => {
       void runPromise(
         handleMessage(ws, raw).pipe(
-          Effect.catch((error) => Effect.logError("Error handling message", error)),
+          Effect.catch((error) =>
+            Effect.gen(function* () {
+              yield* errorInbox.capture({
+                source: "server-internal",
+                category: "websocket",
+                severity: "error",
+                summary: "WebSocket message handler failed",
+                detail: error instanceof Error ? error.message : String(error),
+                context: {
+                  error,
+                },
+              }).pipe(Effect.catch(() => Effect.void));
+              yield* Effect.logError("Error handling message", error);
+            }),
+          ),
         ),
       );
     });

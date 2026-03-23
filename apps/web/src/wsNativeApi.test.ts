@@ -284,6 +284,80 @@ describe("wsNativeApi", () => {
     expect(warnSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("delivers server.errorInboxUpdated payloads", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { createWsNativeApi, onServerErrorInboxUpdated } = await import("./wsNativeApi");
+
+    createWsNativeApi();
+    const listener = vi.fn();
+    onServerErrorInboxUpdated(listener);
+
+    emitPush(WS_CHANNELS.serverErrorInboxUpdated, {
+      reason: "upsert",
+      entry: {
+        id: "err-1",
+        fingerprint: "fingerprint-1",
+        source: "provider-runtime",
+        category: "provider",
+        severity: "error",
+        projectId: "project-1",
+        threadId: "thread-1",
+        turnId: null,
+        provider: "codex",
+        summary: "Provider runtime error",
+        detail: "spawn failed",
+        latestContextJson: {
+          method: "process/error",
+        },
+        firstSeenAt: "2026-03-22T19:00:00.000Z",
+        lastSeenAt: "2026-03-22T19:01:00.000Z",
+        occurrenceCount: 1,
+        linkedTaskId: null,
+        resolution: null,
+      },
+    });
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: "upsert",
+        entry: expect.objectContaining({
+          summary: "Provider runtime error",
+        }),
+      }),
+    );
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it("reports malformed server.errorInboxUpdated payloads through the error inbox reporter", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    requestMock.mockResolvedValue(undefined);
+    const { createWsNativeApi, onServerErrorInboxUpdated } = await import("./wsNativeApi");
+
+    createWsNativeApi();
+    const listener = vi.fn();
+    onServerErrorInboxUpdated(listener);
+
+    emitPush(WS_CHANNELS.serverErrorInboxUpdated, {
+      reason: "upsert",
+      entry: {
+        id: "err-1",
+      },
+    });
+
+    expect(listener).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(requestMock).toHaveBeenCalledWith(
+      WS_METHODS.serverReportClientDiagnostic,
+      expect.objectContaining({
+        source: "websocket",
+        category: "websocket",
+        severity: "warning",
+        summary: "Dropped inbound WebSocket push payload",
+      }),
+    );
+  });
+
   it("forwards valid terminal and orchestration events", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const { createWsNativeApi } = await import("./wsNativeApi");
@@ -417,6 +491,61 @@ describe("wsNativeApi", () => {
 
     expect(requestMock).toHaveBeenCalledWith(ORCHESTRATION_WS_METHODS.dispatchCommand, {
       command,
+    });
+  });
+
+  it("forwards error inbox server RPC methods", async () => {
+    requestMock.mockResolvedValue({ ok: true });
+    const { createWsNativeApi } = await import("./wsNativeApi");
+
+    const api = createWsNativeApi();
+
+    await api.server.getErrorInbox();
+    await api.server.reportClientDiagnostic({
+      source: "browser-runtime",
+      category: "browser",
+      severity: "error",
+      summary: "Unhandled runtime error",
+      detail: "Cannot read properties of undefined",
+      projectId: ProjectId.makeUnsafe("project-1"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      context: {
+        route: "/thread-1",
+      },
+    });
+    await api.server.setErrorInboxEntryResolution({
+      entryId: "err-1",
+      resolution: "resolved",
+    });
+    await api.server.promoteErrorInboxEntryToTask({
+      entryId: "err-1",
+      projectId: ProjectId.makeUnsafe("project-1"),
+    });
+
+    expect(requestMock).toHaveBeenNthCalledWith(1, WS_METHODS.serverGetErrorInbox);
+    expect(requestMock).toHaveBeenNthCalledWith(2, WS_METHODS.serverReportClientDiagnostic, {
+      source: "browser-runtime",
+      category: "browser",
+      severity: "error",
+      summary: "Unhandled runtime error",
+      detail: "Cannot read properties of undefined",
+      projectId: ProjectId.makeUnsafe("project-1"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      context: {
+        route: "/thread-1",
+      },
+    });
+    expect(requestMock).toHaveBeenNthCalledWith(
+      3,
+      WS_METHODS.serverSetErrorInboxEntryResolution,
+      {
+        entryId: "err-1",
+        resolution: "resolved",
+      },
+    );
+    expect(requestMock).toHaveBeenNthCalledWith(4, WS_METHODS.serverPromoteErrorInboxEntryToTask, {
+      entryId: "err-1",
+      projectId: ProjectId.makeUnsafe("project-1"),
     });
   });
 

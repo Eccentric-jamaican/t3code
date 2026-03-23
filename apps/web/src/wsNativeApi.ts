@@ -5,6 +5,7 @@ import {
   type ContextMenuItem,
   type NativeApi,
   ServerConfigUpdatedPayload,
+  ServerErrorInboxUpdatedPayload,
   ServerProviderStateUpdatedPayload,
   TerminalEvent,
   WS_CHANNELS,
@@ -14,11 +15,13 @@ import {
 import { Cause, Schema } from "effect";
 
 import { showContextMenuFallback } from "./contextMenuFallback";
+import { reportClientDiagnostic, setClientDiagnosticReporter } from "./errorInboxReporter";
 import { WsTransport } from "./wsTransport";
 
 let instance: { api: NativeApi; transport: WsTransport } | null = null;
 const welcomeListeners = new Set<(payload: WsWelcomePayload) => void>();
 const serverConfigUpdatedListeners = new Set<(payload: ServerConfigUpdatedPayload) => void>();
+const serverErrorInboxUpdatedListeners = new Set<(payload: ServerErrorInboxUpdatedPayload) => void>();
 const serverProviderStateUpdatedListeners = new Set<
   (payload: ServerProviderStateUpdatedPayload) => void
 >();
@@ -36,6 +39,17 @@ const decodeAndWarnOnFailure = <T>(
       reason: "decode-failed",
       raw,
       issue: Cause.pretty(decoded.cause),
+    });
+    reportClientDiagnostic({
+      source: "websocket",
+      category: "websocket",
+      severity: "warning",
+      summary: "Dropped inbound WebSocket push payload",
+      detail: Cause.pretty(decoded.cause),
+      context: {
+        raw,
+        stack: Cause.pretty(decoded.cause),
+      },
     });
     return null;
   }
@@ -101,6 +115,15 @@ export function onServerProviderStateUpdated(
 
   return () => {
     serverProviderStateUpdatedListeners.delete(listener);
+  };
+}
+
+export function onServerErrorInboxUpdated(
+  listener: (payload: ServerErrorInboxUpdatedPayload) => void,
+): () => void {
+  serverErrorInboxUpdatedListeners.add(listener);
+  return () => {
+    serverErrorInboxUpdatedListeners.delete(listener);
   };
 }
 
@@ -219,11 +242,19 @@ export function createWsNativeApi(): NativeApi {
     },
     server: {
       getConfig: () => transport.request(WS_METHODS.serverGetConfig),
+      getErrorInbox: () => transport.request(WS_METHODS.serverGetErrorInbox),
+      reportClientDiagnostic: (input) =>
+        transport.request(WS_METHODS.serverReportClientDiagnostic, input),
+      setErrorInboxEntryResolution: (input) =>
+        transport.request(WS_METHODS.serverSetErrorInboxEntryResolution, input),
+      promoteErrorInboxEntryToTask: (input) =>
+        transport.request(WS_METHODS.serverPromoteErrorInboxEntryToTask, input),
       upsertKeybinding: (input) => transport.request(WS_METHODS.serverUpsertKeybinding, input),
       startProviderLogin: (input) => transport.request(WS_METHODS.serverStartProviderLogin, input),
       cancelProviderLogin: (input) =>
         transport.request(WS_METHODS.serverCancelProviderLogin, input),
       logoutProvider: (input) => transport.request(WS_METHODS.serverLogoutProvider, input),
+      onErrorInboxUpdated: (callback) => onServerErrorInboxUpdated(callback),
     },
     orchestration: {
       getSnapshot: () => transport.request(ORCHESTRATION_WS_METHODS.getSnapshot),
@@ -241,6 +272,20 @@ export function createWsNativeApi(): NativeApi {
         }),
     },
   };
+
+  setClientDiagnosticReporter((input) => api.server.reportClientDiagnostic(input));
+
+  transport.subscribe(WS_CHANNELS.serverErrorInboxUpdated, (data) => {
+    const payload = decodeAndWarnOnFailure(ServerErrorInboxUpdatedPayload, data);
+    if (!payload) return;
+    for (const listener of serverErrorInboxUpdatedListeners) {
+      try {
+        listener(payload);
+      } catch {
+        // Swallow listener errors
+      }
+    }
+  });
 
   instance = { api, transport };
   return api;

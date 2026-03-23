@@ -19,6 +19,7 @@ import { GitCore } from "../../git/Services/GitCore.ts";
 import { ProviderAdapterRequestError } from "../../provider/Errors.ts";
 import { TextGeneration } from "../../git/Services/TextGeneration.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
+import { ErrorInboxService } from "../../errorInbox/Services/ErrorInbox.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import {
   ProviderCommandReactor,
@@ -129,6 +130,7 @@ function buildGeneratedWorktreeBranchName(raw: string): string {
 const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const providerService = yield* ProviderService;
+  const errorInbox = yield* ErrorInboxService;
   const git = yield* GitCore;
   const textGeneration = yield* TextGeneration;
   const handledTurnStartKeys = yield* Cache.make<string, true>({
@@ -654,9 +656,25 @@ const make = Effect.gen(function* () {
         if (Cause.hasInterruptsOnly(cause)) {
           return Effect.failCause(cause);
         }
-        return Effect.logWarning("provider command reactor failed to process event", {
-          eventType: event.type,
-          cause: Cause.pretty(cause),
+        const prettyCause = Cause.pretty(cause);
+        return Effect.gen(function* () {
+          yield* errorInbox
+            .capture({
+              source: "server-internal",
+              category: "orchestration",
+              severity: "error",
+              summary: "Provider command reactor failed",
+              detail: prettyCause,
+              threadId: event.payload.threadId ?? null,
+              context: {
+                eventType: event.type,
+              },
+            })
+            .pipe(Effect.catch(() => Effect.void));
+          yield* Effect.logWarning("provider command reactor failed to process event", {
+            eventType: event.type,
+            cause: prettyCause,
+          });
         });
       }),
     );

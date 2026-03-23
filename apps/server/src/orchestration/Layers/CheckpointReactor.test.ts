@@ -36,6 +36,7 @@ import {
 } from "../../provider/Services/ProviderService.ts";
 import { checkpointRefForThreadTurn } from "../../checkpointing/Utils.ts";
 import { ServerConfig } from "../../config.ts";
+import { ErrorInboxServiceNoop } from "../../errorInbox/Layers/ErrorInbox.ts";
 
 const TEST_TIMEOUT_MS = 120_000;
 
@@ -260,6 +261,7 @@ describe("CheckpointReactor", { timeout: TEST_TIMEOUT_MS }, () => {
       Layer.provideMerge(orchestrationLayer),
       Layer.provideMerge(Layer.succeed(ProviderService, provider.service)),
       Layer.provideMerge(CheckpointStoreLive),
+      Layer.provideMerge(ErrorInboxServiceNoop),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
       Layer.provideMerge(NodeServices.layer),
     );

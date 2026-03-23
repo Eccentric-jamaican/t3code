@@ -38,6 +38,7 @@ import { ProviderAdapterRegistry } from "../src/provider/Services/ProviderAdapte
 import { ProviderSessionDirectoryLive } from "../src/provider/Layers/ProviderSessionDirectory.ts";
 import { makeProviderServiceLive } from "../src/provider/Layers/ProviderService.ts";
 import { makeCodexAdapterLive } from "../src/provider/Layers/CodexAdapter.ts";
+import { ErrorInboxServiceNoop } from "../src/errorInbox/Layers/ErrorInbox.ts";
 import { CodexAdapter } from "../src/provider/Services/CodexAdapter.ts";
 import { ProviderService } from "../src/provider/Services/ProviderService.ts";
 import { AnalyticsService } from "../src/telemetry/Services/AnalyticsService.ts";
@@ -246,6 +247,7 @@ export const makeOrchestrationIntegrationHarness = (
       }),
     ).pipe(
       Layer.provide(makeCodexAdapterLive()),
+      Layer.provideMerge(ErrorInboxServiceNoop),
       Layer.provideMerge(ServerConfig.layerTest(workspaceDir, stateDir)),
       Layer.provideMerge(NodeServices.layer),
       Layer.provideMerge(providerSessionDirectoryLayer),
@@ -269,9 +271,10 @@ export const makeOrchestrationIntegrationHarness = (
       ProjectionPendingApprovalRepositoryLive,
       CheckpointStoreLive,
       providerLayer,
+      ErrorInboxServiceNoop,
     );
     const runtimeIngestionLayer = ProviderRuntimeIngestionLive.pipe(
-      Layer.provideMerge(runtimeServicesLayer),
+      Layer.provide(runtimeServicesLayer),
     );
     const gitCoreLayer = Layer.succeed(GitCore, {
       renameBranch: (input: Parameters<GitCoreShape["renameBranch"]>[0]) =>
@@ -281,23 +284,23 @@ export const makeOrchestrationIntegrationHarness = (
       generateBranchName: () => Effect.succeed({ branch: null }),
     } as unknown as TextGenerationShape);
     const providerCommandReactorLayer = ProviderCommandReactorLive.pipe(
-      Layer.provideMerge(runtimeServicesLayer),
-      Layer.provideMerge(gitCoreLayer),
-      Layer.provideMerge(textGenerationLayer),
+      Layer.provide(runtimeServicesLayer),
+      Layer.provide(gitCoreLayer),
+      Layer.provide(textGenerationLayer),
     );
     const checkpointReactorLayer = CheckpointReactorLive.pipe(
-      Layer.provideMerge(runtimeServicesLayer),
+      Layer.provide(runtimeServicesLayer),
     );
     const taskLifecycleReactorLayer = TaskLifecycleReactorLive.pipe(
-      Layer.provideMerge(runtimeServicesLayer),
+      Layer.provide(runtimeServicesLayer),
     );
     const orchestrationReactorLayer = OrchestrationReactorLive.pipe(
-      Layer.provideMerge(runtimeIngestionLayer),
-      Layer.provideMerge(providerCommandReactorLayer),
-      Layer.provideMerge(checkpointReactorLayer),
-      Layer.provideMerge(taskLifecycleReactorLayer),
+      Layer.provide(runtimeIngestionLayer),
+      Layer.provide(providerCommandReactorLayer),
+      Layer.provide(checkpointReactorLayer),
+      Layer.provide(taskLifecycleReactorLayer),
     );
-    const layer = orchestrationReactorLayer.pipe(
+    const layer = Layer.mergeAll(runtimeServicesLayer, orchestrationReactorLayer).pipe(
       Layer.provide(persistenceLayer),
       Layer.provideMerge(ServerConfig.layerTest(workspaceDir, stateDir)),
       Layer.provideMerge(NodeServices.layer),

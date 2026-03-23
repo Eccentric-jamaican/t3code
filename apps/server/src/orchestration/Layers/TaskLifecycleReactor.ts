@@ -1,6 +1,7 @@
 import { CommandId, type OrchestrationEvent, type TaskId } from "@t3tools/contracts";
 import { Cause, Effect, Layer, Queue, Stream } from "effect";
 
+import { ErrorInboxService } from "../../errorInbox/Services/ErrorInbox.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import {
   TaskLifecycleReactor,
@@ -19,6 +20,7 @@ const serverCommandId = (tag: string): CommandId =>
 
 const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
+  const errorInbox = yield* ErrorInboxService;
 
   const resolveTaskForThread = Effect.fnUntraced(function* (threadId: string) {
     const readModel = yield* orchestrationEngine.getReadModel();
@@ -106,9 +108,25 @@ const make = Effect.gen(function* () {
         if (Cause.hasInterruptsOnly(cause)) {
           return Effect.failCause(cause);
         }
-        return Effect.logWarning("task lifecycle reactor failed to process event", {
-          eventType: event.type,
-          cause: Cause.pretty(cause),
+        const prettyCause = Cause.pretty(cause);
+        return Effect.gen(function* () {
+          yield* errorInbox
+            .capture({
+              source: "server-internal",
+              category: "orchestration",
+              severity: "error",
+              summary: "Task lifecycle reactor failed",
+              detail: prettyCause,
+              threadId: event.payload.threadId,
+              context: {
+                eventType: event.type,
+              },
+            })
+            .pipe(Effect.catch(() => Effect.void));
+          yield* Effect.logWarning("task lifecycle reactor failed to process event", {
+            eventType: event.type,
+            cause: prettyCause,
+          });
         });
       }),
     );

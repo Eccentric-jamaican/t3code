@@ -2,6 +2,12 @@ import { Schema, Struct } from "effect";
 import { ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas";
 
 import {
+  ServerGetErrorInboxInput,
+  ServerPromoteErrorInboxEntryToTaskInput,
+  ServerReportClientDiagnosticInput,
+  ServerSetErrorInboxEntryResolutionInput,
+} from "./errorInbox";
+import {
   ClientOrchestrationCommand,
   OrchestrationGetFullThreadDiffInput,
   ORCHESTRATION_WS_METHODS,
@@ -71,6 +77,10 @@ export const WS_METHODS = {
 
   // Server meta
   serverGetConfig: "server.getConfig",
+  serverGetErrorInbox: "server.getErrorInbox",
+  serverReportClientDiagnostic: "server.reportClientDiagnostic",
+  serverSetErrorInboxEntryResolution: "server.setErrorInboxEntryResolution",
+  serverPromoteErrorInboxEntryToTask: "server.promoteErrorInboxEntryToTask",
   serverUpsertKeybinding: "server.upsertKeybinding",
   serverStartProviderLogin: "server.startProviderLogin",
   serverCancelProviderLogin: "server.cancelProviderLogin",
@@ -84,6 +94,7 @@ export const WS_CHANNELS = {
   serverWelcome: "server.welcome",
   serverConfigUpdated: "server.configUpdated",
   serverProviderStateUpdated: "server.providerStateUpdated",
+  serverErrorInboxUpdated: "server.errorInboxUpdated",
 } as const;
 
 // -- Tagged Union of all request body schemas ─────────────────────────
@@ -137,6 +148,16 @@ const WebSocketRequestBody = Schema.Union([
 
   // Server meta
   tagRequestBody(WS_METHODS.serverGetConfig, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.serverGetErrorInbox, ServerGetErrorInboxInput),
+  tagRequestBody(WS_METHODS.serverReportClientDiagnostic, ServerReportClientDiagnosticInput),
+  tagRequestBody(
+    WS_METHODS.serverSetErrorInboxEntryResolution,
+    ServerSetErrorInboxEntryResolutionInput,
+  ),
+  tagRequestBody(
+    WS_METHODS.serverPromoteErrorInboxEntryToTask,
+    ServerPromoteErrorInboxEntryToTaskInput,
+  ),
   tagRequestBody(WS_METHODS.serverUpsertKeybinding, KeybindingRule),
   tagRequestBody(WS_METHODS.serverStartProviderLogin, ServerStartProviderLoginInput),
   tagRequestBody(WS_METHODS.serverCancelProviderLogin, ServerCancelProviderLoginInput),

@@ -9,7 +9,11 @@ import { describe, expect, it, afterEach, vi } from "vitest";
 import { createServer } from "./wsServer";
 import WebSocket from "ws";
 import { ServerConfig, type ServerConfigShape } from "./config";
-import { makeServerProviderLayer, makeServerRuntimeServicesLayer } from "./serverLayers";
+import {
+  makeServerProviderLayer,
+  makeServerRuntimeCoreLayer,
+  makeServerRuntimeServicesLayer,
+} from "./serverLayers";
 
 import {
   DEFAULT_TERMINAL_ID,
@@ -444,7 +448,6 @@ describe("WebSocket Server", () => {
     const stateDir = options.stateDir ?? makeTempDir("t3code-ws-state-");
     const scope = await Effect.runPromise(Scope.make("sequential"));
     const persistenceLayer = options.persistenceLayer ?? SqlitePersistenceMemory;
-    const providerLayer = options.providerLayer ?? makeServerProviderLayer();
     const providerHealthLayer = Layer.succeed(
       ProviderHealth,
       options.providerHealth ?? defaultProviderHealthService,
@@ -468,7 +471,11 @@ describe("WebSocket Server", () => {
       autoBootstrapProjectFromCwd: options.autoBootstrapProjectFromCwd ?? false,
       logWebSocketEvents: options.logWebSocketEvents ?? Boolean(options.devUrl),
     } satisfies ServerConfigShape);
-    const infrastructureLayer = providerLayer.pipe(Layer.provideMerge(persistenceLayer));
+    const baseLayer = Layer.merge(persistenceLayer, serverConfigLayer);
+    const coreLayer = makeServerRuntimeCoreLayer().pipe(Layer.provide(baseLayer));
+    const providerLayer =
+      options.providerLayer ??
+      makeServerProviderLayer().pipe(Layer.provide(Layer.merge(coreLayer, baseLayer)));
     const runtimeOverrides = Layer.mergeAll(
       options.gitManager ? Layer.succeed(GitManager, options.gitManager) : Layer.empty,
       options.gitCore
@@ -479,12 +486,16 @@ describe("WebSocket Server", () => {
         : Layer.empty,
     );
 
-    const runtimeLayer = Layer.merge(
-      Layer.merge(
-        makeServerRuntimeServicesLayer().pipe(Layer.provide(infrastructureLayer)),
-        infrastructureLayer,
+    const runtimeLayer = Layer.empty.pipe(
+      Layer.provideMerge(providerLayer),
+      Layer.provideMerge(
+        makeServerRuntimeServicesLayer({
+          coreLayer: coreLayer as ReturnType<typeof makeServerRuntimeCoreLayer>,
+        }).pipe(
+          Layer.provide(Layer.merge(providerLayer, baseLayer)),
+        ),
       ),
-      runtimeOverrides,
+      Layer.provideMerge(runtimeOverrides),
     );
     const dependenciesLayer = Layer.empty.pipe(
       Layer.provideMerge(runtimeLayer),

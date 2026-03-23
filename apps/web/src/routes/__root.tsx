@@ -20,7 +20,12 @@ import { useTerminalStateStore } from "../terminalStateStore";
 import { preferredTerminalEditor } from "../terminal-links";
 import { terminalRunningSubprocessFromEvent } from "../terminalActivity";
 import {
+  reportClientDiagnostic,
+  setClientDiagnosticRoute,
+} from "../errorInboxReporter";
+import {
   onServerConfigUpdated,
+  onServerErrorInboxUpdated,
   onServerProviderStateUpdated,
   onServerWelcome,
 } from "../wsNativeApi";
@@ -134,6 +139,8 @@ function errorDetails(error: unknown): string {
 
 function EventRouter() {
   const syncServerReadModel = useStore((store) => store.syncServerReadModel);
+  const syncErrorInbox = useStore((store) => store.syncErrorInbox);
+  const upsertErrorInboxEntry = useStore((store) => store.upsertErrorInboxEntry);
   const setProjectExpanded = useStore((store) => store.setProjectExpanded);
   const removeOrphanedTerminalStates = useTerminalStateStore(
     (store) => store.removeOrphanedTerminalStates,
@@ -146,6 +153,10 @@ function EventRouter() {
   const handledBootstrapThreadIdRef = useRef<string | null>(null);
 
   pathnameRef.current = pathname;
+
+  useEffect(() => {
+    setClientDiagnosticRoute(pathname);
+  }, [pathname]);
 
   useEffect(() => {
     const api = readNativeApi();
@@ -189,7 +200,16 @@ function EventRouter() {
       syncing = false;
     };
 
+    const syncInbox = async () => {
+      const entries = await api.server.getErrorInbox();
+      if (disposed) {
+        return;
+      }
+      syncErrorInbox(entries);
+    };
+
     void syncSnapshot().catch(() => undefined);
+    void syncInbox().catch(() => undefined);
 
     const unsubDomainEvent = api.orchestration.onDomainEvent((event) => {
       if (event.sequence <= latestSequence) {
@@ -285,6 +305,48 @@ function EventRouter() {
     const unsubServerProviderStateUpdated = onServerProviderStateUpdated(() => {
       void queryClient.invalidateQueries({ queryKey: serverQueryKeys.config() });
     });
+    const unsubServerErrorInboxUpdated = onServerErrorInboxUpdated((payload) => {
+      upsertErrorInboxEntry(payload.entry);
+    });
+
+    const onWindowError = (event: ErrorEvent) => {
+      reportClientDiagnostic({
+        source: "browser-runtime",
+        category: "browser",
+        severity: "error",
+        summary: event.message || "Unhandled browser error",
+        detail: event.error instanceof Error ? event.error.message : event.message || null,
+        context: {
+          filename: event.filename,
+          lineno: event.lineno,
+          colno: event.colno,
+          stack: event.error instanceof Error ? event.error.stack : undefined,
+        },
+      });
+    };
+
+    const onUnhandledRejection = (event: PromiseRejectionEvent) => {
+      const reason =
+        event.reason instanceof Error
+          ? event.reason.message
+          : typeof event.reason === "string"
+            ? event.reason
+            : "Unhandled promise rejection";
+      reportClientDiagnostic({
+        source: "browser-promise",
+        category: "browser",
+        severity: "error",
+        summary: "Unhandled promise rejection",
+        detail: reason,
+        context: {
+          reason,
+          stack: event.reason instanceof Error ? event.reason.stack : undefined,
+        },
+      });
+    };
+
+    window.addEventListener("error", onWindowError);
+    window.addEventListener("unhandledrejection", onUnhandledRejection);
     return () => {
       disposed = true;
       unsubDomainEvent();
@@ -292,13 +354,18 @@ function EventRouter() {
       unsubWelcome();
       unsubServerConfigUpdated();
       unsubServerProviderStateUpdated();
+      unsubServerErrorInboxUpdated();
+      window.removeEventListener("error", onWindowError);
+      window.removeEventListener("unhandledrejection", onUnhandledRejection);
     };
   }, [
     navigate,
     queryClient,
     removeOrphanedTerminalStates,
     setProjectExpanded,
+    syncErrorInbox,
     syncServerReadModel,
+    upsertErrorInboxEntry,
   ]);
 
   return null;

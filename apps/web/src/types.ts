@@ -1,4 +1,5 @@
 import type {
+  ErrorInboxEntry as ContractErrorInboxEntry,
   OrchestrationLatestTurn,
   OrchestrationProjectRules as ContractOrchestrationProjectRules,
   OrchestrationProposedPlanId,
@@ -136,6 +137,8 @@ export interface TaskRuntime {
   lastActivityAt: string | null;
   updatedAt: string;
 }
+
+export interface ErrorInboxEntry extends ContractErrorInboxEntry {}
 
 export interface ProjectRules extends ContractOrchestrationProjectRules {}
 

@@ -1,7 +1,7 @@
 import type { Project, ProjectRules, Task, TaskRuntime, TaskRuntimeStatus, TaskState, Thread } from "~/types";
 import type { OrchestrateFilters } from "./orchestrateFilters";
 
-export type OrchestrateView = "board" | "list";
+export type OrchestrateView = "board" | "list" | "inbox";
 
 export interface TaskWithRuntime {
   readonly task: Task;

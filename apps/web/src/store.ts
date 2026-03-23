@@ -13,7 +13,15 @@ import {
   resolveModelSlugForProvider,
 } from "@t3tools/shared/model";
 import { create } from "zustand";
-import { type ChatMessage, type Project, type ProjectRules, type Task, type TaskRuntime, type Thread } from "./types";
+import {
+  type ChatMessage,
+  type ErrorInboxEntry,
+  type Project,
+  type ProjectRules,
+  type Task,
+  type TaskRuntime,
+  type Thread,
+} from "./types";
 
 // ── State ────────────────────────────────────────────────────────────
 
@@ -22,6 +30,7 @@ export interface AppState {
   projectRules: ProjectRules[];
   tasks: Task[];
   taskRuntimes: TaskRuntime[];
+  errorInbox: ErrorInboxEntry[];
   threads: Thread[];
   threadsHydrated: boolean;
 }
@@ -43,6 +52,7 @@ const initialState: AppState = {
   projectRules: [],
   tasks: [],
   taskRuntimes: [],
+  errorInbox: [],
   threads: [],
   threadsHydrated: false,
 };
@@ -364,6 +374,28 @@ export function toggleProject(state: AppState, projectId: Project["id"]): AppSta
   };
 }
 
+export function syncErrorInbox(state: AppState, entries: ReadonlyArray<ErrorInboxEntry>): AppState {
+  return {
+    ...state,
+    errorInbox: entries.map((entry) => ({ ...entry })),
+  };
+}
+
+export function upsertErrorInboxEntry(state: AppState, entry: ErrorInboxEntry): AppState {
+  const existingIndex = state.errorInbox.findIndex((current) => current.id === entry.id);
+  const nextEntries =
+    existingIndex === -1
+      ? [{ ...entry }, ...state.errorInbox]
+      : state.errorInbox.map((current, index) =>
+          index === existingIndex ? { ...entry } : current,
+        );
+  nextEntries.sort((left, right) => right.lastSeenAt.localeCompare(left.lastSeenAt));
+  return {
+    ...state,
+    errorInbox: nextEntries,
+  };
+}
+
 export function setProjectExpanded(
   state: AppState,
   projectId: Project["id"],
@@ -409,6 +441,8 @@ export function setThreadBranch(
 
 interface AppStore extends AppState {
   syncServerReadModel: (readModel: OrchestrationReadModel) => void;
+  syncErrorInbox: (entries: ReadonlyArray<ErrorInboxEntry>) => void;
+  upsertErrorInboxEntry: (entry: ErrorInboxEntry) => void;
   markThreadVisited: (threadId: ThreadId, visitedAt?: string) => void;
   markThreadUnread: (threadId: ThreadId) => void;
   toggleProject: (projectId: Project["id"]) => void;
@@ -420,6 +454,8 @@ interface AppStore extends AppState {
 export const useStore = create<AppStore>((set) => ({
   ...readPersistedState(),
   syncServerReadModel: (readModel) => set((state) => syncServerReadModel(state, readModel)),
+  syncErrorInbox: (entries) => set((state) => syncErrorInbox(state, entries)),
+  upsertErrorInboxEntry: (entry) => set((state) => upsertErrorInboxEntry(state, entry)),
   markThreadVisited: (threadId, visitedAt) =>
     set((state) => markThreadVisited(state, threadId, visitedAt)),
   markThreadUnread: (threadId) => set((state) => markThreadUnread(state, threadId)),

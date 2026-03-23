@@ -29,6 +29,7 @@ import Migration0014 from "./Migrations/014_ProjectionTurnsInteractionMode.ts";
 import Migration0015 from "./Migrations/015_ProjectionThreadsPinned.ts";
 import Migration0016 from "./Migrations/016_OrchestrationTasks.ts";
 import Migration0017 from "./Migrations/017_ProjectionTaskAttachments.ts";
+import Migration0018 from "./Migrations/018_ErrorInbox.ts";
 import { Effect } from "effect";
 
 /**
@@ -59,6 +60,7 @@ const loader = Migrator.fromRecord({
   "15_ProjectionThreadsPinned": Migration0015,
   "16_OrchestrationTasks": Migration0016,
   "17_ProjectionTaskAttachments": Migration0017,
+  "18_ErrorInbox": Migration0018,
 });
 
 /**

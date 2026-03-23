@@ -53,6 +53,7 @@ function makeState(thread: Thread): AppState {
     projectRules: [],
     tasks: [],
     taskRuntimes: [],
+    errorInbox: [],
     threads: [thread],
     threadsHydrated: true,
   };

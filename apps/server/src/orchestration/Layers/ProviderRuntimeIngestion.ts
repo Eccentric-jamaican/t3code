@@ -14,6 +14,7 @@ import {
 import { Cache, Cause, Duration, Effect, Layer, Option, Queue, Ref, Stream } from "effect";
 
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
+import { ErrorInboxService } from "../../errorInbox/Services/ErrorInbox.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import {
   ProviderRuntimeIngestionService,
@@ -473,6 +474,7 @@ function runtimeEventToActivities(
 const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const providerService = yield* ProviderService;
+  const errorInbox = yield* ErrorInboxService;
 
   const assistantDeliveryModeRef = yield* Ref.make<AssistantDeliveryMode>(
     DEFAULT_ASSISTANT_DELIVERY_MODE,
@@ -1024,6 +1026,87 @@ const make = Effect.gen(function* () {
             createdAt: now,
           });
         }
+
+        yield* errorInbox.capture({
+          source: "provider-runtime",
+          category: "provider",
+          severity: "error",
+          summary: "Provider runtime error",
+          detail: runtimeErrorMessage,
+          projectId: thread.projectId,
+          threadId: thread.id,
+          turnId: eventTurnId ?? null,
+          provider: event.provider,
+          context: {
+            method: event.raw?.method ?? null,
+            errorClass:
+              event.payload && typeof event.payload === "object" && "class" in event.payload
+                ? (event.payload as { class?: unknown }).class
+                : null,
+            payload: event.payload,
+          },
+          occurredAt: now,
+        }).pipe(Effect.catch(() => Effect.void));
+      }
+
+      if (event.type === "config.warning") {
+        yield* errorInbox.capture({
+          source: "provider-config",
+          category: "config",
+          severity: "warning",
+          summary: event.payload.summary,
+          detail: event.payload.details ?? null,
+          projectId: thread.projectId,
+          threadId: thread.id,
+          turnId: eventTurnId ?? null,
+          provider: event.provider,
+          context: {
+            method: event.raw?.method ?? null,
+            path: event.payload.path ?? null,
+            range: event.payload.range ?? null,
+          },
+          occurredAt: now,
+        }).pipe(Effect.catch(() => Effect.void));
+      }
+
+      if (event.type === "mcp.oauth.completed" && event.payload.success === false) {
+        yield* errorInbox.capture({
+          source: "provider-mcp",
+          category: "mcp",
+          severity: "warning",
+          summary: `MCP OAuth failed${event.payload.name ? `: ${event.payload.name}` : ""}`,
+          detail: event.payload.error ?? null,
+          projectId: thread.projectId,
+          threadId: thread.id,
+          turnId: eventTurnId ?? null,
+          provider: event.provider,
+          context: {
+            method: event.raw?.method ?? null,
+            name: event.payload.name ?? null,
+            error: event.payload.error ?? null,
+          },
+          occurredAt: now,
+        }).pipe(Effect.catch(() => Effect.void));
+      }
+
+      if (event.type === "session.exited") {
+        yield* errorInbox.capture({
+          source: "provider-runtime",
+          category: "provider",
+          severity: "error",
+          summary: "Provider session exited unexpectedly",
+          detail: event.payload.reason ?? null,
+          projectId: thread.projectId,
+          threadId: thread.id,
+          turnId: eventTurnId ?? null,
+          provider: event.provider,
+          context: {
+            method: event.raw?.method ?? null,
+            exitKind: event.payload.exitKind ?? null,
+            reason: event.payload.reason ?? null,
+          },
+          occurredAt: now,
+        }).pipe(Effect.catch(() => Effect.void));
       }
 
       if (event.type === "thread.metadata.updated" && event.payload.name) {
@@ -1084,11 +1167,37 @@ const make = Effect.gen(function* () {
         if (Cause.hasInterruptsOnly(cause)) {
           return Effect.failCause(cause);
         }
-        return Effect.logWarning("provider runtime ingestion failed to process event", {
-          source: input.source,
-          eventId: input.event.eventId,
-          eventType: input.event.type,
-          cause: Cause.pretty(cause),
+        const prettyCause = Cause.pretty(cause);
+        return Effect.gen(function* () {
+          yield* errorInbox
+            .capture({
+              source: "server-internal",
+              category: "orchestration",
+              severity: "error",
+              summary: "Provider runtime ingestion failed",
+              detail: prettyCause,
+              threadId: "threadId" in input.event ? (input.event.threadId ?? null) : null,
+              turnId:
+                "turnId" in input.event && input.event.turnId !== undefined
+                  ? input.event.turnId
+                  : null,
+              provider:
+                input.source === "runtime" && "provider" in input.event
+                  ? input.event.provider
+                  : null,
+              context: {
+                source: input.source,
+                eventId: input.event.eventId,
+                eventType: input.event.type,
+              },
+            })
+            .pipe(Effect.catch(() => Effect.void));
+          yield* Effect.logWarning("provider runtime ingestion failed to process event", {
+            source: input.source,
+            eventId: input.event.eventId,
+            eventType: input.event.type,
+            cause: prettyCause,
+          });
         });
       }),
     );

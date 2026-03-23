@@ -22,7 +22,7 @@ import {
   type CodexAppServerSendTurnInput,
 } from "../../codexAppServerManager.ts";
 import { ServerConfig } from "../../config.ts";
-import { ProviderAdapterValidationError } from "../Errors.ts";
+import { ErrorInboxServiceNoop } from "../../errorInbox/Layers/ErrorInbox.ts";
 import { CodexAdapter } from "../Services/CodexAdapter.ts";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.ts";
 import { makeCodexAdapterLive } from "./CodexAdapter.ts";
@@ -152,6 +152,7 @@ const validationLayer = it.layer(
   makeCodexAdapterLive({ manager: validationManager }).pipe(
     Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
     Layer.provideMerge(providerSessionDirectoryTestLayer),
+    Layer.provideMerge(ErrorInboxServiceNoop),
     Layer.provideMerge(NodeServices.layer),
   ),
 );
@@ -193,6 +194,7 @@ const sessionErrorLayer = it.layer(
   makeCodexAdapterLive({ manager: sessionErrorManager }).pipe(
     Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
     Layer.provideMerge(providerSessionDirectoryTestLayer),
+    Layer.provideMerge(ErrorInboxServiceNoop),
     Layer.provideMerge(NodeServices.layer),
   ),
 );
@@ -260,6 +262,7 @@ const lifecycleLayer = it.layer(
   makeCodexAdapterLive({ manager: lifecycleManager }).pipe(
     Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
     Layer.provideMerge(providerSessionDirectoryTestLayer),
+    Layer.provideMerge(ErrorInboxServiceNoop),
     Layer.provideMerge(NodeServices.layer),
   ),
 );

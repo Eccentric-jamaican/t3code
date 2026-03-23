@@ -16,6 +16,7 @@ import {
 } from "../../checkpointing/Utils.ts";
 import { CheckpointStore } from "../../checkpointing/Services/CheckpointStore.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
+import { ErrorInboxService } from "../../errorInbox/Services/ErrorInbox.ts";
 import { CheckpointReactor, type CheckpointReactorShape } from "../Services/CheckpointReactor.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { CheckpointStoreError } from "../../checkpointing/Errors.ts";
@@ -61,6 +62,7 @@ const serverCommandId = (tag: string): CommandId =>
 const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const providerService = yield* ProviderService;
+  const errorInbox = yield* ErrorInboxService;
   const checkpointStore = yield* CheckpointStore;
 
   const appendRevertFailureActivity = (input: {
@@ -566,10 +568,31 @@ const make = Effect.gen(function* () {
         if (Cause.hasInterruptsOnly(cause)) {
           return Effect.failCause(cause);
         }
-        return Effect.logWarning("checkpoint reactor failed to process input", {
-          source: input.source,
-          eventType: input.event.type,
-          cause: Cause.pretty(cause),
+        const prettyCause = Cause.pretty(cause);
+        return Effect.gen(function* () {
+          yield* errorInbox
+            .capture({
+              source: "server-internal",
+              category: "orchestration",
+              severity: "error",
+              summary: "Checkpoint reactor failed",
+              detail: prettyCause,
+              threadId: "threadId" in input.event ? (input.event.threadId ?? null) : null,
+              turnId:
+                "turnId" in input.event && input.event.turnId !== undefined
+                  ? input.event.turnId
+                  : null,
+              context: {
+                source: input.source,
+                eventType: input.event.type,
+              },
+            })
+            .pipe(Effect.catch(() => Effect.void));
+          yield* Effect.logWarning("checkpoint reactor failed to process input", {
+            source: input.source,
+            eventType: input.event.type,
+            cause: prettyCause,
+          });
         });
       }),
     );
