@@ -838,6 +838,33 @@ describe("ChatView timeline estimator parity (full app)", () => {
     document.body.innerHTML = "";
   });
 
+  it("renders the desktop thread shell with rounded corners and no shell dividers", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-shell-check" as MessageId,
+        targetText: "check shell chrome",
+      }),
+    });
+
+    try {
+      const shell = document.querySelector<HTMLElement>("[data-testid='chat-thread-shell']");
+      const sidebarContainer = document.querySelector<HTMLElement>("[data-slot='sidebar-container']");
+      const header = document.querySelector<HTMLElement>("header");
+
+      expect(shell).not.toBeNull();
+      expect(sidebarContainer).not.toBeNull();
+      expect(header).not.toBeNull();
+
+      expect(window.getComputedStyle(shell!).borderTopLeftRadius).toBe("18px");
+      expect(window.getComputedStyle(shell!).borderTopRightRadius).toBe("18px");
+      expect(window.getComputedStyle(sidebarContainer!).borderRightWidth).toBe("0px");
+      expect(window.getComputedStyle(header!).borderBottomWidth).toBe("0px");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it.each(TEXT_VIEWPORT_MATRIX)(
     "keeps long user message estimate close at the $name viewport",
     async (viewport) => {

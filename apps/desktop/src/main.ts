@@ -817,6 +817,16 @@ function resolveIconPath(ext: "ico" | "icns" | "png"): string | null {
   return resolveResourcePath(`icon.${ext}`);
 }
 
+function resolveBrandPngPath(): string | null {
+  const bundledIcon = resolveIconPath("png");
+  if (bundledIcon) {
+    return bundledIcon;
+  }
+
+  const repoAsset = Path.join(ROOT_DIR, "assets", "prod", "ACODE.png");
+  return FS.existsSync(repoAsset) ? repoAsset : null;
+}
+
 function configureAppIdentity(): void {
   app.setName(APP_DISPLAY_NAME);
   const commitHash = resolveAboutCommitHash();
@@ -831,7 +841,7 @@ function configureAppIdentity(): void {
   }
 
   if (process.platform === "darwin" && app.dock) {
-    const iconPath = resolveIconPath("png");
+    const iconPath = resolveBrandPngPath();
     if (iconPath) {
       app.dock.setIcon(iconPath);
     }
@@ -1403,14 +1413,26 @@ function registerIpcHandlers(): void {
   });
 }
 
-function getIconOption(): { icon: string } | Record<string, never> {
-  if (process.platform === "darwin") return {}; // macOS uses .icns from app bundle
-  const ext = process.platform === "win32" ? "ico" : "png";
-  const iconPath = resolveIconPath(ext);
-  return iconPath ? { icon: iconPath } : {};
+function getIconOption(): { icon: Electron.NativeImage } | Record<string, never> {
+  if (process.platform === "darwin") return {}; // macOS uses dock/app bundle icons
+  const iconPath = resolveBrandPngPath();
+  if (!iconPath) {
+    return {};
+  }
+
+  const icon = nativeImage.createFromPath(iconPath);
+  return icon.isEmpty() ? {} : { icon };
 }
 
 function createWindow(): BrowserWindow {
+  const titleBarOverlay =
+    process.platform === "darwin"
+      ? false
+      : {
+          color: "#00000000",
+          symbolColor: "#6b7280",
+          height: 52,
+        };
   const window = new BrowserWindow({
     width: 1100,
     height: 780,
@@ -1420,8 +1442,9 @@ function createWindow(): BrowserWindow {
     autoHideMenuBar: true,
     ...getIconOption(),
     title: APP_DISPLAY_NAME,
-    titleBarStyle: "hiddenInset",
-    trafficLightPosition: { x: 16, y: 18 },
+    titleBarStyle: process.platform === "darwin" ? "hidden" : "hidden",
+    titleBarOverlay,
+    ...(process.platform === "darwin" ? { trafficLightPosition: { x: 76, y: 18 } } : {}),
     webPreferences: {
       preload: Path.join(__dirname, "preload.js"),
       contextIsolation: true,

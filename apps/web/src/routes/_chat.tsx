@@ -6,8 +6,9 @@ import { DiffWorkerPoolProvider } from "../components/DiffWorkerPoolProvider";
 import IntegratedBrowserPane from "../components/IntegratedBrowserPane";
 import ThreadSidebar from "../components/Sidebar";
 import { useComposerDraftStore } from "../composerDraftStore";
+import { isElectron } from "../env";
 import { useStore } from "../store";
-import { Sidebar, SidebarProvider } from "~/components/ui/sidebar";
+import { Sidebar, SidebarDesktopBrandTrigger, SidebarProvider } from "~/components/ui/sidebar";
 
 function ChatRouteLayout() {
   const navigate = useNavigate();
@@ -52,11 +53,21 @@ function ChatRouteLayout() {
       <Sidebar
         side="left"
         collapsible="offcanvas"
-        className="border-r border-border bg-card text-foreground"
+        className="bg-[var(--app-sidebar-surface)] text-foreground"
       >
         <ThreadSidebar />
       </Sidebar>
-      <div className="flex min-w-0 flex-1">
+      <div
+        className="fixed top-0 left-0 z-30 hidden h-[var(--desktop-leading-slot-width)] w-[var(--desktop-leading-slot-width)] items-center justify-center md:flex"
+        data-testid="desktop-leading-slot"
+      >
+        <div
+          className={isElectron ? "drag-region flex h-full w-full items-center justify-center" : "flex h-full w-full items-center justify-center"}
+        >
+          <SidebarDesktopBrandTrigger className={isElectron ? "[-webkit-app-region:no-drag]" : undefined} />
+        </div>
+      </div>
+      <div className="flex min-w-0 flex-1 bg-[var(--app-workspace-canvas)]">
         <DiffWorkerPoolProvider>
           <Outlet />
         </DiffWorkerPoolProvider>

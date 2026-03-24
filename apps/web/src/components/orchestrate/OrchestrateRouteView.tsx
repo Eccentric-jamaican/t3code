@@ -28,6 +28,7 @@ import { useMediaQuery } from "~/hooks/useMediaQuery";
 import { cn, newCommandId, newTaskId } from "~/lib/utils";
 import { useStore } from "~/store";
 import type { ProjectRules, TaskRuntimeStatus, TaskState } from "~/types";
+import AppPageShell from "~/components/AppPageShell";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import {
@@ -60,7 +61,7 @@ import {
   SheetPanel,
   SheetTitle,
 } from "~/components/ui/sheet";
-import { SidebarInset, SidebarInsetTrigger } from "~/components/ui/sidebar";
+import { SidebarInsetTrigger, useSidebar } from "~/components/ui/sidebar";
 import { Toggle } from "~/components/ui/toggle";
 import { toastManager } from "~/components/ui/toast";
 import {
@@ -469,6 +470,7 @@ export default function OrchestrateRouteView({
   taskIdFromSearch,
   viewFromSearch,
 }: RouteSearchProps) {
+  const { open } = useSidebar();
   const navigate = useNavigate();
   const projects = useStore((store) => store.projects);
   const tasks = useStore((store) => store.tasks);
@@ -982,12 +984,15 @@ export default function OrchestrateRouteView({
   ) : null;
 
   return (
-    <SidebarInset className="min-w-0 bg-background">
-      <div className="flex min-h-0 flex-1 flex-col">
-        <header className="border-b border-border px-3 py-2.5 sm:px-5">
+    <AppPageShell className="min-w-0">
+      <div className="flex min-h-0 flex-1 flex-col bg-[var(--app-page-shell-surface)]">
+        <header
+          className="px-3 py-2.5 sm:px-5"
+          style={!isMobile && !open ? { paddingLeft: "68px" } : undefined}
+        >
           <div className="flex min-w-0 flex-wrap items-center gap-2 sm:gap-3">
             <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
-              <SidebarInsetTrigger className="shrink-0" />
+              <SidebarInsetTrigger className="shrink-0 md:hidden" />
               <h1 className="truncate text-[clamp(0.98rem,0.92rem+0.22vw,1.12rem)] font-medium text-foreground">
                 Orchestrate
               </h1>
@@ -2266,6 +2271,6 @@ export default function OrchestrateRouteView({
           ) : null}
         </SheetContent>
       </Sheet>
-    </SidebarInset>
+    </AppPageShell>
   );
 }

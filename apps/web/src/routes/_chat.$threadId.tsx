@@ -8,7 +8,7 @@ import { parseDiffRouteSearch } from "../diffRouteSearch";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { useStore } from "../store";
 import { Sheet, SheetPopup } from "../components/ui/sheet";
-import { Sidebar, SidebarInset, SidebarProvider, SidebarRail } from "~/components/ui/sidebar";
+import { Sidebar, SidebarProvider, SidebarRail } from "~/components/ui/sidebar";
 
 const DiffPanel = lazy(() => import("../components/DiffPanel"));
 const DIFF_INLINE_LAYOUT_MEDIA_QUERY = "(max-width: 1180px)";
@@ -116,7 +116,7 @@ const DiffPanelInlineSidebar = (props: {
       <Sidebar
         side="right"
         collapsible="offcanvas"
-        className="border-l border-border bg-card text-foreground"
+        className="bg-card text-foreground"
         resizable={{
           minWidth: DIFF_INLINE_SIDEBAR_MIN_WIDTH,
           shouldAcceptWidth: shouldAcceptInlineSidebarWidth,
@@ -178,20 +178,23 @@ function ChatThreadRouteView() {
 
   if (!shouldUseDiffSheet) {
     return (
-      <>
-        <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
+      <div
+        className="flex min-h-0 min-w-0 flex-1 overflow-hidden bg-[var(--app-thread-surface)]"
+        data-testid="chat-thread-shell"
+      >
+        <div className="min-h-0 flex-1 text-foreground">
           <ChatView key={threadId} threadId={threadId} />
-        </SidebarInset>
+        </div>
         <DiffPanelInlineSidebar diffOpen={diffOpen} onCloseDiff={closeDiff} onOpenDiff={openDiff} />
-      </>
+      </div>
     );
   }
 
   return (
     <>
-      <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
+      <div className="min-h-0 flex-1 bg-[var(--app-thread-surface)] text-foreground" data-testid="chat-thread-shell">
         <ChatView key={threadId} threadId={threadId} />
-      </SidebarInset>
+      </div>
       <DiffPanelSheet diffOpen={diffOpen} onCloseDiff={closeDiff}>
         <Suspense fallback={<DiffLoadingFallback inline={false} />}>
           <DiffPanel mode="sheet" />

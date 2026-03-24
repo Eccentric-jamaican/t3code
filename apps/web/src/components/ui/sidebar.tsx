@@ -17,6 +17,7 @@ import {
 import { Skeleton } from "~/components/ui/skeleton";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { useMediaQuery } from "~/hooks/useMediaQuery";
+import { useTheme } from "~/hooks/useTheme";
 
 const SIDEBAR_COOKIE_NAME = "sidebar_state";
 const SIDEBAR_COOKIE_MAX_AGE = 60 * 60 * 24 * 7;
@@ -24,6 +25,15 @@ const SIDEBAR_WIDTH = "16rem";
 const SIDEBAR_WIDTH_MOBILE = "calc(100vw - var(--spacing(3)))";
 const SIDEBAR_WIDTH_ICON = "3rem";
 const SIDEBAR_RESIZE_DEFAULT_MIN_WIDTH = 16 * 16;
+const DESKTOP_LEADING_SLOT_WIDTH = "52px";
+const SIDEBAR_BRAND_MARK_LIGHT_SRC = new URL(
+  "../../../../../assets/prod/ACODE.png",
+  import.meta.url,
+).href;
+const SIDEBAR_BRAND_MARK_DARK_SRC = new URL(
+  "../../../../../assets/prod/ACODE-DARK.png",
+  import.meta.url,
+).href;
 
 type SidebarContextProps = {
   state: "expanded" | "collapsed";
@@ -154,6 +164,7 @@ function SidebarProvider({
         data-slot="sidebar-wrapper"
         style={
           {
+            "--desktop-leading-slot-width": DESKTOP_LEADING_SLOT_WIDTH,
             "--sidebar-width": SIDEBAR_WIDTH,
             "--sidebar-width-icon": SIDEBAR_WIDTH_ICON,
             ...style,
@@ -280,7 +291,7 @@ function Sidebar({
             // Adjust the padding for floating and inset variants.
             variant === "floating" || variant === "inset"
               ? "p-2 group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)+(--spacing(4))+2px)]"
-              : "group-data-[collapsible=icon]:w-(--sidebar-width-icon) group-data-[side=left]:border-r group-data-[side=right]:border-l",
+              : "group-data-[collapsible=icon]:w-(--sidebar-width-icon)",
             className,
           )}
           data-slot="sidebar-container"
@@ -335,6 +346,65 @@ function SidebarInsetTrigger(props: React.ComponentProps<typeof SidebarTrigger>)
   }
 
   return <SidebarTrigger {...props} />;
+}
+
+function SidebarDesktopBrandTrigger({
+  className,
+  ...props
+}: Omit<React.ComponentProps<"button">, "onClick">) {
+  const { isMobile, open, openMobile, toggleSidebar } = useSidebar();
+  const isExpanded = isMobile ? openMobile : open;
+
+  if (isMobile) {
+    return null;
+  }
+
+  return (
+    <button
+      aria-label={isExpanded ? "Collapse Sidebar" : "Expand Sidebar"}
+      className={cn(
+        "group/desktop-sidebar relative inline-flex h-[var(--desktop-leading-slot-width)] w-[var(--desktop-leading-slot-width)] items-center justify-center rounded-[14px] text-foreground transition-colors duration-150 hover:bg-accent/55 focus-visible:bg-accent/55 focus-visible:outline-none",
+        className,
+      )}
+      data-sidebar="desktop-brand-trigger"
+      data-slot="sidebar-desktop-brand-trigger"
+      data-testid="desktop-sidebar-brand-trigger"
+      onClick={() => toggleSidebar()}
+      title={isExpanded ? "Collapse Sidebar" : "Expand Sidebar"}
+      type="button"
+      {...props}
+    >
+      <span
+        aria-hidden="true"
+        className="flex items-center justify-center transition-opacity duration-150 group-hover/desktop-sidebar:opacity-0 group-focus/desktop-sidebar:opacity-0 group-focus-visible/desktop-sidebar:opacity-0"
+        data-slot="sidebar-brand-mark"
+      >
+        <SidebarBrandMark />
+      </span>
+      <span
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0 flex items-center justify-center opacity-0 transition-opacity duration-150 group-hover/desktop-sidebar:opacity-100 group-focus/desktop-sidebar:opacity-100 group-focus-visible/desktop-sidebar:opacity-100"
+        data-slot="sidebar-brand-toggle-icon"
+      >
+        <SidebarDockToggleIcon collapsed={!isExpanded} className="size-4.5" />
+      </span>
+      <span className="sr-only">{isExpanded ? "Collapse Sidebar" : "Expand Sidebar"}</span>
+    </button>
+  );
+}
+
+function SidebarBrandMark() {
+  const { resolvedTheme } = useTheme();
+
+  return (
+    <img
+      src={resolvedTheme === "dark" ? SIDEBAR_BRAND_MARK_DARK_SRC : SIDEBAR_BRAND_MARK_LIGHT_SRC}
+      alt=""
+      aria-hidden="true"
+      className="h-6 w-6 select-none object-contain"
+      draggable={false}
+    />
+  );
 }
 
 function SidebarDockToggleIcon({
@@ -1017,6 +1087,7 @@ function SidebarMenuSubButton({
 }
 
 export {
+  SidebarDesktopBrandTrigger,
   Sidebar,
   SidebarContent,
   SidebarFooter,

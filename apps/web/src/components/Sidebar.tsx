@@ -95,8 +95,6 @@ import {
   SidebarMenuSub,
   SidebarMenuSubButton,
   SidebarMenuSubItem,
-  SidebarSeparator,
-  SidebarTrigger,
 } from "./ui/sidebar";
 import { formatWorktreePathForDisplay, getOrphanedWorktreePathForThread } from "../worktreeCleanup";
 import { isNonEmpty as isNonEmptyString } from "effect/String";
@@ -2052,8 +2050,7 @@ export default function Sidebar() {
     <>
       {isElectron ? (
         <SidebarHeader className="drag-region h-[52px] px-4 py-0">
-          <div className="flex h-full items-center gap-2">
-            <SidebarTrigger className="shrink-0 [-webkit-app-region:no-drag]" />
+          <div className="flex h-full items-center justify-end gap-2">
             {showDesktopUpdateButton ? (
               <Tooltip>
                 <TooltipTrigger
@@ -2080,9 +2077,7 @@ export default function Sidebar() {
           </div>
         </SidebarHeader>
       ) : (
-        <SidebarHeader className="px-4 py-3">
-          <SidebarTrigger className="shrink-0" />
-        </SidebarHeader>
+        <SidebarHeader className="h-[52px] px-4 py-0" />
       )}
 
       <div
@@ -2328,7 +2323,6 @@ export default function Sidebar() {
         </SidebarGroup>
       </div>
 
-      <SidebarSeparator />
       <SidebarFooter className="gap-2 p-3">
         <SidebarSettingsPopover
           pathname={pathname}

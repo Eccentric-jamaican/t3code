@@ -42,6 +42,11 @@ const ProductionWindowsIconSource = Effect.zipWith(
   Effect.service(Path.Path),
   (repoRoot, path) => path.join(repoRoot, BRAND_ASSET_PATHS.productionWindowsIconIco),
 );
+const ProductionDesktopBrandPngSource = Effect.zipWith(
+  RepoRoot,
+  Effect.service(Path.Path),
+  (repoRoot, path) => path.join(repoRoot, BRAND_ASSET_PATHS.productionDesktopBrandPng),
+);
 const encodeJsonString = Schema.encodeEffect(Schema.UnknownFromJsonString);
 
 interface PlatformConfig {
@@ -358,14 +363,20 @@ function stageWindowsIcons(stageResourcesDir: string) {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const iconSource = yield* ProductionWindowsIconSource;
+    const brandPngSource = yield* ProductionDesktopBrandPngSource;
     if (!(yield* fs.exists(iconSource))) {
       return yield* new BuildScriptError({
         message: `Production Windows icon source is missing at ${iconSource}`,
       });
     }
+    if (!(yield* fs.exists(brandPngSource))) {
+      return yield* new BuildScriptError({
+        message: `Production brand png source is missing at ${brandPngSource}`,
+      });
+    }
 
-    const iconPath = path.join(stageResourcesDir, "icon.ico");
-    yield* fs.copyFile(iconSource, iconPath);
+    yield* fs.copyFile(iconSource, path.join(stageResourcesDir, "icon.ico"));
+    yield* fs.copyFile(brandPngSource, path.join(stageResourcesDir, "icon.png"));
   });
 }
 

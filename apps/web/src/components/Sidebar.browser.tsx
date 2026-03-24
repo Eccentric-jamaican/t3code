@@ -409,12 +409,8 @@ function projectOrderLabels(): string[] {
   );
 }
 
-function visibleSidebarTriggerCount(label: "Collapse Sidebar" | "Expand Sidebar"): number {
-  return [
-    ...document.querySelectorAll<HTMLElement>(
-      `[data-slot='sidebar-trigger'][aria-label='${label}']`,
-    ),
-  ].filter((element) => {
+function visibleSidebarToggleCount(label: "Collapse Sidebar" | "Expand Sidebar"): number {
+  return [...document.querySelectorAll<HTMLElement>(`[aria-label='${label}']`)].filter((element) => {
     const rect = element.getBoundingClientRect();
     const style = window.getComputedStyle(element);
     return (
@@ -428,6 +424,18 @@ function visibleSidebarTriggerCount(label: "Collapse Sidebar" | "Expand Sidebar"
       rect.left < window.innerWidth
     );
   }).length;
+}
+
+function desktopBrandTriggerOpacities(): { mark: number; toggle: number } {
+  const mark = document.querySelector<HTMLElement>("[data-slot='sidebar-brand-mark']");
+  const toggle = document.querySelector<HTMLElement>("[data-slot='sidebar-brand-toggle-icon']");
+  expect(mark).not.toBeNull();
+  expect(toggle).not.toBeNull();
+
+  return {
+    mark: Number.parseFloat(window.getComputedStyle(mark!).opacity),
+    toggle: Number.parseFloat(window.getComputedStyle(toggle!).opacity),
+  };
 }
 
 async function dragProjectRow(
@@ -633,13 +641,64 @@ describe("Sidebar browser", () => {
   it("shows only one desktop sidebar toggle at a time for the active thread shell", async () => {
     const mounted = await mountSidebarApp([`/${THREAD_ID}`]);
 
-    await expect
-      .poll(() => visibleSidebarTriggerCount("Collapse Sidebar"))
-      .toBe(1);
+    await expect.poll(() => visibleSidebarToggleCount("Collapse Sidebar")).toBe(1);
 
     await page.getByRole("button", { name: "Collapse Sidebar" }).click();
 
-    await expect.poll(() => visibleSidebarTriggerCount("Expand Sidebar")).toBe(1);
+    await expect.poll(() => visibleSidebarToggleCount("Expand Sidebar")).toBe(1);
+    await expect
+      .poll(() => {
+        const shellLeft =
+          document.querySelector<HTMLElement>("[data-testid='chat-thread-shell']")?.getBoundingClientRect()
+            .left ?? 0;
+        return shellLeft;
+      })
+      .toBe(52);
+
+    await mounted.cleanup();
+  });
+
+  it("renders the desktop leading slot and swaps from the logo mark to the toggle affordance on hover and focus", async () => {
+    const mounted = await mountSidebarApp([`/${THREAD_ID}`]);
+    const trigger = page.getByTestId("desktop-sidebar-brand-trigger");
+
+    await expect.element(page.getByTestId("desktop-leading-slot")).toBeVisible();
+    await expect.element(trigger).toBeVisible();
+
+    await expect.poll(() => desktopBrandTriggerOpacities()).toEqual({ mark: 1, toggle: 0 });
+
+    await trigger.hover();
+    await expect.poll(() => desktopBrandTriggerOpacities()).toEqual({ mark: 0, toggle: 1 });
+
+    document.querySelector<HTMLElement>("[data-testid='desktop-sidebar-brand-trigger']")?.blur();
+    await nextFrame();
+    await expect.poll(() => desktopBrandTriggerOpacities()).toEqual({ mark: 1, toggle: 0 });
+
+    document.querySelector<HTMLElement>("[data-testid='desktop-sidebar-brand-trigger']")?.focus();
+    await nextFrame();
+    await expect.poll(() => desktopBrandTriggerOpacities()).toEqual({ mark: 0, toggle: 1 });
+
+    await mounted.cleanup();
+  });
+
+  it("keeps the desktop leading slot in plain browser mode without Electron APIs", async () => {
+    Reflect.deleteProperty(window, "desktopBridge");
+    const mounted = await mountSidebarApp([`/${THREAD_ID}`]);
+
+    await expect.element(page.getByTestId("desktop-leading-slot")).toBeVisible();
+    await expect.element(page.getByTestId("desktop-sidebar-brand-trigger")).toBeVisible();
+    await expect
+      .poll(() => {
+        const slotBottom =
+          document.querySelector<HTMLElement>("[data-testid='desktop-leading-slot']")?.getBoundingClientRect()
+            .bottom ?? 0;
+        const firstNavTop =
+          document
+            .querySelector<HTMLElement>("[data-testid='new-thread-sidebar-button']")
+            ?.getBoundingClientRect().top ?? 0;
+        return { slotBottom, firstNavTop };
+      })
+      .toEqual({ slotBottom: 52, firstNavTop: 56 });
 
     await mounted.cleanup();
   });
