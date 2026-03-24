@@ -3,6 +3,7 @@ import "../index.css";
 
 import {
   EventId,
+  type DesktopBridge,
   ORCHESTRATION_WS_METHODS,
   type MessageId,
   type OrchestrationProposedPlanId,
@@ -452,6 +453,70 @@ function createActivePlanRegressionSnapshot(options: {
   };
 }
 
+function createPlanFollowUpRegressionSnapshot(): OrchestrationReadModel {
+  const snapshot = createSnapshotForTargetUser({
+    targetMessageId: "msg-user-plan-follow-up-target" as MessageId,
+    targetText: USER_MARKDOWN_TEXT,
+  });
+  const [thread] = snapshot.threads;
+  if (!thread) {
+    throw new Error("Expected an initial thread snapshot.");
+  }
+
+  const latestTurnId = "turn-plan-follow-up-latest" as TurnId;
+  const assistantMessageId = thread.messages
+    .toReversed()
+    .find((message) => message.role === "assistant")?.id;
+
+  if (!assistantMessageId) {
+    throw new Error("Expected a latest assistant message for the plan follow-up fixture.");
+  }
+
+  return {
+    ...snapshot,
+    threads: [
+      {
+        ...thread,
+        title: "Plan follow-up regression thread",
+        interactionMode: "plan",
+        latestTurn: {
+          turnId: latestTurnId,
+          state: "completed",
+          interactionMode: "plan",
+          requestedAt: isoAt(120),
+          startedAt: isoAt(121),
+          completedAt: isoAt(122),
+          assistantMessageId,
+        },
+        proposedPlans: [
+          {
+            id: "plan-follow-up-1" as OrchestrationProposedPlanId,
+            turnId: latestTurnId,
+            planMarkdown: [
+              "# Restore chat shell containment",
+              "",
+              "1. Constrain the thread shell to the viewport.",
+              "2. Keep the message viewport scrollable.",
+              "3. Preserve the composer and branch controls in plan follow-up mode.",
+            ].join("\n"),
+            createdAt: isoAt(123),
+            updatedAt: isoAt(123),
+          },
+        ],
+        session: {
+          threadId: THREAD_ID,
+          status: "ready",
+          providerName: "codex",
+          runtimeMode: "full-access",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: NOW_ISO,
+        },
+      },
+    ],
+  };
+}
+
 function resolveWsRpc(tag: string): unknown {
   if (tag === ORCHESTRATION_WS_METHODS.getSnapshot) {
     return fixture.snapshot;
@@ -592,6 +657,56 @@ async function waitForComposerEditor(): Promise<HTMLElement> {
   return waitForElement(
     () => document.querySelector<HTMLElement>('[contenteditable="true"]'),
     "Unable to find composer editor.",
+  );
+}
+
+async function waitForChatViewRoot(): Promise<HTMLElement> {
+  return waitForElement(
+    () => document.querySelector<HTMLElement>("[data-testid='chat-view-root']"),
+    "Unable to find the ChatView root container.",
+  );
+}
+
+async function waitForMessagesScrollContainer(): Promise<HTMLDivElement> {
+  return waitForElement(
+    () => document.querySelector<HTMLDivElement>("[data-testid='chat-messages-scroll-container']"),
+    "Unable to find ChatView message scroll container.",
+  );
+}
+
+function visibleSidebarToggleCount(label: "Collapse Sidebar" | "Expand Sidebar"): number {
+  return [...document.querySelectorAll<HTMLElement>(`[aria-label='${label}']`)].filter((element) => {
+    const rect = element.getBoundingClientRect();
+    const style = window.getComputedStyle(element);
+    return (
+      style.display !== "none" &&
+      style.visibility !== "hidden" &&
+      rect.width > 0 &&
+      rect.height > 0 &&
+      rect.bottom > 0 &&
+      rect.right > 0 &&
+      rect.top < window.innerHeight &&
+      rect.left < window.innerWidth
+    );
+  }).length;
+}
+
+async function collapseDesktopSidebar(): Promise<void> {
+  await expect.poll(() => visibleSidebarToggleCount("Collapse Sidebar")).toBe(1);
+  await page.getByRole("button", { name: "Collapse Sidebar" }).click();
+  await expect.poll(() => visibleSidebarToggleCount("Expand Sidebar")).toBe(1);
+  await waitForLayout();
+}
+
+function isElementFullyVisible(element: HTMLElement): boolean {
+  const rect = element.getBoundingClientRect();
+  return (
+    rect.width > 0 &&
+    rect.height > 0 &&
+    rect.top >= 0 &&
+    rect.left >= 0 &&
+    rect.bottom <= window.innerHeight &&
+    rect.right <= window.innerWidth
   );
 }
 
@@ -822,6 +937,12 @@ describe("ChatView timeline estimator parity (full app)", () => {
     localStorage.clear();
     document.body.innerHTML = "";
     wsRequests.length = 0;
+    window.desktopBridge = {
+      getWsUrl: () => `ws://${window.location.host}`,
+      openExternal: async () => true,
+      pickFolder: async () => null,
+      confirm: async () => true,
+    } as unknown as DesktopBridge;
     useComposerDraftStore.setState({
       draftsByThreadId: {},
       draftThreadsByThreadId: {},
@@ -835,6 +956,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
   });
 
   afterEach(() => {
+    Reflect.deleteProperty(window, "desktopBridge");
     document.body.innerHTML = "";
   });
 
@@ -848,18 +970,74 @@ describe("ChatView timeline estimator parity (full app)", () => {
     });
 
     try {
+      const sidebarInset = document.querySelector<HTMLElement>("[data-slot='sidebar-inset']");
       const shell = document.querySelector<HTMLElement>("[data-testid='chat-thread-shell']");
       const sidebarContainer = document.querySelector<HTMLElement>("[data-slot='sidebar-container']");
       const header = document.querySelector<HTMLElement>("header");
+      const headerTitle = document.querySelector<HTMLElement>("[data-testid='chat-header-title']");
 
+      expect(sidebarInset).not.toBeNull();
       expect(shell).not.toBeNull();
       expect(sidebarContainer).not.toBeNull();
       expect(header).not.toBeNull();
+      expect(headerTitle).not.toBeNull();
 
-      expect(window.getComputedStyle(shell!).borderTopLeftRadius).toBe("18px");
-      expect(window.getComputedStyle(shell!).borderTopRightRadius).toBe("18px");
+      await collapseDesktopSidebar();
+
+      const shellStyle = window.getComputedStyle(shell!);
+      const sidebarInsetStyle = window.getComputedStyle(sidebarInset!);
+      const shellRect = shell!.getBoundingClientRect();
+      const slotRect =
+        document.querySelector<HTMLElement>("[data-testid='desktop-leading-slot']")?.getBoundingClientRect() ??
+        null;
+      const titleRect = headerTitle!.getBoundingClientRect();
+
+      expect(Number.parseFloat(shellStyle.borderTopLeftRadius)).toBeGreaterThan(0);
+      expect(Number.parseFloat(shellStyle.borderTopRightRadius)).toBeGreaterThan(0);
+      expect(shellRect.height).toBeLessThanOrEqual(window.innerHeight + 1);
+      expect(sidebarInsetStyle.paddingLeft).toBe("0px");
+      expect(slotRect).not.toBeNull();
+      expect(Math.round(titleRect.left - slotRect!.right)).toBeGreaterThanOrEqual(4);
       expect(window.getComputedStyle(sidebarContainer!).borderRightWidth).toBe("0px");
       expect(window.getComputedStyle(header!).borderBottomWidth).toBe("0px");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps the thread message viewport scrollable", async () => {
+    const mounted = await mountChatView({
+      viewport: {
+        ...DEFAULT_VIEWPORT,
+        name: "desktop-short",
+        height: 700,
+      },
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-scroll-check" as MessageId,
+        targetText: "scroll check",
+      }),
+    });
+
+    try {
+      const chatViewRoot = await waitForChatViewRoot();
+      const header = await waitForElement(
+        () => document.querySelector<HTMLElement>("[data-testid='chat-view-root'] > header"),
+        "Unable to find the ChatView header.",
+      );
+      const scrollContainer = await waitForMessagesScrollContainer();
+
+      await expect
+        .poll(() => scrollContainer.scrollHeight > scrollContainer.clientHeight)
+        .toBe(true);
+
+      scrollContainer.scrollTop = 240;
+      scrollContainer.dispatchEvent(new Event("scroll"));
+      await waitForLayout();
+
+      await expect.poll(() => scrollContainer.scrollTop).toBeGreaterThan(0);
+      expect(window.getComputedStyle(chatViewRoot).overflowY).toBe("hidden");
+      expect(chatViewRoot.scrollHeight).toBeLessThanOrEqual(chatViewRoot.clientHeight + 1);
+      expect(isElementFullyVisible(header)).toBe(true);
     } finally {
       await mounted.cleanup();
     }
@@ -1444,6 +1622,80 @@ describe("ChatView timeline estimator parity (full app)", () => {
         },
         { timeout: 8_000, interval: 16 },
       );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps header actions and branch controls visible in constrained plan mode", async () => {
+    const mounted = await mountChatView({
+      viewport: {
+        ...DEFAULT_VIEWPORT,
+        name: "desktop-constrained-plan",
+        height: 700,
+      },
+      snapshot: createPlanFollowUpRegressionSnapshot(),
+    });
+
+    try {
+      const openButton = await waitForElement(
+        () =>
+          Array.from(document.querySelectorAll("button")).find(
+            (button) => button.textContent?.trim() === "Open",
+          ) as HTMLButtonElement | null,
+        "Unable to find the thread header open button.",
+      );
+      const gitActionOptions = await waitForElement(
+        () => document.querySelector<HTMLElement>("button[aria-label='Git action options']"),
+        "Unable to find the git action menu button.",
+      );
+      const diffToggle = await waitForElement(
+        () => document.querySelector<HTMLElement>("button[aria-label='Toggle diff panel']"),
+        "Unable to find the thread header diff toggle.",
+      );
+      const composerEditor = await waitForComposerEditor();
+      const implementButton = await waitForElement(
+        () =>
+          Array.from(document.querySelectorAll("button")).find(
+            (button) => button.textContent?.trim() === "Implement",
+          ) as HTMLButtonElement | null,
+        "Unable to find the composer implement button.",
+      );
+      const envModeControl = await waitForElement(
+        () =>
+          Array.from(document.querySelectorAll<HTMLElement>("button, span")).find((element) => {
+            const text = element.textContent?.trim();
+            return text === "Local" || text === "Worktree" || text === "New worktree";
+          }) ?? null,
+        "Unable to find the branch environment control.",
+      );
+      const branchSelector = await waitForElement(
+        () =>
+          Array.from(document.querySelectorAll("button")).find(
+            (button) => button.textContent?.includes("main"),
+          ) as HTMLButtonElement | null,
+        "Unable to find the branch selector.",
+      );
+      const scrollContainer = await waitForMessagesScrollContainer();
+
+      expect(isElementFullyVisible(openButton)).toBe(true);
+      expect(isElementFullyVisible(gitActionOptions)).toBe(true);
+      expect(isElementFullyVisible(diffToggle)).toBe(true);
+      expect(isElementFullyVisible(composerEditor)).toBe(true);
+      expect(isElementFullyVisible(implementButton)).toBe(true);
+      expect(isElementFullyVisible(envModeControl)).toBe(true);
+      expect(isElementFullyVisible(branchSelector)).toBe(true);
+      await expect
+        .poll(() => scrollContainer.scrollHeight > scrollContainer.clientHeight)
+        .toBe(true);
+
+      scrollContainer.scrollTop = 280;
+      scrollContainer.dispatchEvent(new Event("scroll"));
+      await waitForLayout();
+      await expect.poll(() => scrollContainer.scrollTop).toBeGreaterThan(0);
+      expect(isElementFullyVisible(openButton)).toBe(true);
+      expect(isElementFullyVisible(implementButton)).toBe(true);
+      expect(isElementFullyVisible(branchSelector)).toBe(true);
     } finally {
       await mounted.cleanup();
     }

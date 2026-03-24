@@ -152,6 +152,7 @@ import {
   VisualStudioCode,
   Zed,
 } from "./Icons";
+import { useAppPageDesktopLeadingSlotSafeHeaderStyle } from "./AppPageShell";
 import { cn, isMacPlatform, isWindowsPlatform } from "~/lib/utils";
 import { Badge } from "./ui/badge";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
@@ -498,6 +499,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const setStoreThreadError = useStore((store) => store.setError);
   const setStoreThreadBranch = useStore((store) => store.setThreadBranch);
   const { settings } = useAppSettings();
+  const desktopLeadingSlotSafeHeaderStyle = useAppPageDesktopLeadingSlotSafeHeaderStyle();
   const navigate = useNavigate();
   const rawSearch = useSearch({
     strict: false,
@@ -3290,7 +3292,12 @@ export default function ChatView({ threadId }: ChatViewProps) {
           </header>
         )}
         {isElectron && (
-          <div className="drag-region flex h-[52px] shrink-0 items-center gap-2 px-3 sm:px-5">
+          <div
+            className={cn(
+              "drag-region flex h-[52px] shrink-0 items-center gap-2 px-3 sm:px-5",
+            )}
+            style={desktopLeadingSlotSafeHeaderStyle}
+          >
             <span className="text-xs text-muted-foreground/50">No active thread</span>
           </div>
         )}
@@ -3304,13 +3311,17 @@ export default function ChatView({ threadId }: ChatViewProps) {
   }
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden bg-[var(--app-thread-surface)]">
+    <div
+      className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[var(--app-thread-surface)]"
+      data-testid="chat-view-root"
+    >
       {/* Top bar */}
       <header
         className={cn(
-          "px-3 sm:px-5",
+          "shrink-0 px-3 sm:px-5",
           isElectron ? "drag-region flex h-[52px] items-center" : "py-2 sm:py-3",
         )}
+        style={desktopLeadingSlotSafeHeaderStyle}
       >
         <ChatHeader
           activeThreadId={activeThread.id}
@@ -3352,15 +3363,18 @@ export default function ChatView({ threadId }: ChatViewProps) {
       </header>
 
       {/* Error banner */}
-      <ProviderHealthBanner status={activeProviderStatus} />
-      <ThreadErrorBanner error={activeThread.error} />
-      <PlanModePanel activePlan={activePlan} />
+      <div className="shrink-0">
+        <ProviderHealthBanner status={activeProviderStatus} />
+        <ThreadErrorBanner error={activeThread.error} />
+        <PlanModePanel activePlan={activePlan} />
+      </div>
 
       {/* Messages */}
       <div className="relative min-h-0 flex-1">
         <div
           ref={setMessagesScrollContainerRef}
           className="min-h-0 size-full overflow-x-hidden overflow-y-auto overscroll-y-contain px-3 py-3 sm:px-5 sm:py-4"
+          data-testid="chat-messages-scroll-container"
           onScroll={onMessagesScroll}
           onClickCapture={onMessagesClickCapture}
           onWheel={onMessagesWheel}
@@ -3419,7 +3433,12 @@ export default function ChatView({ threadId }: ChatViewProps) {
       </div>
 
       {/* Input bar */}
-      <div className={cn("px-3 pt-1.5 sm:px-5 sm:pt-2", isGitRepo ? "pb-1" : "pb-3 sm:pb-4")}>
+      <div
+        className={cn(
+          "shrink-0 px-3 pt-1.5 sm:px-5 sm:pt-2",
+          isGitRepo ? "pb-1" : "pb-3 sm:pb-4",
+        )}
+      >
         <form
           ref={composerFormRef}
           onSubmit={onSend}
@@ -3961,6 +3980,7 @@ const ChatHeader = memo(function ChatHeader({
         <SidebarInsetTrigger className="shrink-0 md:hidden" />
         <h2
           className="min-w-0 shrink truncate text-sm font-medium text-foreground"
+          data-testid="chat-header-title"
           title={activeThreadTitle}
         >
           {activeThreadTitle}

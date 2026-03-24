@@ -11,7 +11,9 @@ import {
   shouldShowFastTierIcon,
   useAppSettings,
 } from "../appSettings";
-import AppPageShell from "../components/AppPageShell";
+import AppPageShell, {
+  useAppPageDesktopLeadingSlotSafeHeaderStyle,
+} from "../components/AppPageShell";
 import { isElectron } from "../env";
 import { useTheme } from "../hooks/useTheme";
 import { cn } from "../lib/utils";
@@ -22,7 +24,7 @@ import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Switch } from "../components/ui/switch";
-import { SidebarInsetTrigger, useSidebar } from "~/components/ui/sidebar";
+import { SidebarInsetTrigger } from "~/components/ui/sidebar";
 
 const THEME_OPTIONS = [
   {
@@ -89,9 +91,9 @@ function patchCustomModels(provider: ProviderKind, models: string[]) {
 }
 
 function SettingsRouteView() {
-  const { isMobile, open } = useSidebar();
   const { theme, setTheme, resolvedTheme } = useTheme();
   const { settings, defaults, updateSettings } = useAppSettings();
+  const desktopLeadingSlotSafeHeaderStyle = useAppPageDesktopLeadingSlotSafeHeaderStyle();
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const [isOpeningKeybindings, setIsOpeningKeybindings] = useState(false);
   const [openKeybindingsError, setOpenKeybindingsError] = useState<string | null>(null);
@@ -190,11 +192,16 @@ function SettingsRouteView() {
             "px-3 sm:px-5",
             isElectron ? "drag-region flex h-[52px] items-center" : "py-2 sm:py-3",
           )}
-          style={!isMobile && !open ? { paddingLeft: "68px" } : undefined}
+          style={desktopLeadingSlotSafeHeaderStyle}
         >
           <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden sm:gap-3">
             <SidebarInsetTrigger className="shrink-0 md:hidden" />
-            <span className="min-w-0 truncate text-sm font-medium text-foreground">Settings</span>
+            <span
+              className="min-w-0 truncate text-sm font-medium text-foreground"
+              data-testid="settings-header-label"
+            >
+              Settings
+            </span>
           </div>
         </header>
 

@@ -2,6 +2,7 @@ import { ThreadId } from "@t3tools/contracts";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { Suspense, lazy, type ReactNode, useCallback, useEffect } from "react";
 
+import AppPageShell from "../components/AppPageShell";
 import ChatView from "../components/ChatView";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { parseDiffRouteSearch } from "../diffRouteSearch";
@@ -178,23 +179,34 @@ function ChatThreadRouteView() {
 
   if (!shouldUseDiffSheet) {
     return (
-      <div
-        className="flex min-h-0 min-w-0 flex-1 overflow-hidden bg-[var(--app-thread-surface)]"
-        data-testid="chat-thread-shell"
-      >
-        <div className="min-h-0 flex-1 text-foreground">
-          <ChatView key={threadId} threadId={threadId} />
+      <AppPageShell className="min-w-0 text-foreground isolate">
+        <div
+          className="flex min-h-0 min-w-0 flex-1 overflow-hidden bg-[var(--app-thread-surface)] md:rounded-[12px]"
+          data-testid="chat-thread-shell"
+        >
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col text-foreground">
+            <ChatView key={threadId} threadId={threadId} />
+          </div>
+          <DiffPanelInlineSidebar
+            diffOpen={diffOpen}
+            onCloseDiff={closeDiff}
+            onOpenDiff={openDiff}
+          />
         </div>
-        <DiffPanelInlineSidebar diffOpen={diffOpen} onCloseDiff={closeDiff} onOpenDiff={openDiff} />
-      </div>
+      </AppPageShell>
     );
   }
 
   return (
     <>
-      <div className="min-h-0 flex-1 bg-[var(--app-thread-surface)] text-foreground" data-testid="chat-thread-shell">
-        <ChatView key={threadId} threadId={threadId} />
-      </div>
+      <AppPageShell className="min-w-0 text-foreground isolate">
+        <div
+          className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--app-thread-surface)] text-foreground md:rounded-[12px]"
+          data-testid="chat-thread-shell"
+        >
+          <ChatView key={threadId} threadId={threadId} />
+        </div>
+      </AppPageShell>
       <DiffPanelSheet diffOpen={diffOpen} onCloseDiff={closeDiff}>
         <Suspense fallback={<DiffLoadingFallback inline={false} />}>
           <DiffPanel mode="sheet" />

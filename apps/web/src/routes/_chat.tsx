@@ -67,7 +67,7 @@ function ChatRouteLayout() {
           <SidebarDesktopBrandTrigger className={isElectron ? "[-webkit-app-region:no-drag]" : undefined} />
         </div>
       </div>
-      <div className="flex min-w-0 flex-1 bg-[var(--app-workspace-canvas)]">
+      <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden bg-[var(--app-workspace-canvas)]">
         <DiffWorkerPoolProvider>
           <Outlet />
         </DiffWorkerPoolProvider>

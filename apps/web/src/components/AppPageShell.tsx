@@ -1,9 +1,22 @@
 import * as React from "react";
 
 import { cn } from "~/lib/utils";
-import { SidebarInset } from "~/components/ui/sidebar";
+import { SidebarInset, useSidebar } from "~/components/ui/sidebar";
 
-function AppPageShell({ className, ...props }: React.ComponentProps<typeof SidebarInset>) {
+export const APP_PAGE_DESKTOP_LEADING_SLOT_SAFE_HEADER_STYLE = {
+  paddingLeft: "calc(var(--desktop-leading-slot-width) + 8px)",
+} satisfies React.CSSProperties;
+
+export function useAppPageDesktopLeadingSlotSafeHeaderStyle() {
+  const { isMobile, open } = useSidebar();
+  return !isMobile && !open ? APP_PAGE_DESKTOP_LEADING_SLOT_SAFE_HEADER_STYLE : undefined;
+}
+
+function AppPageShell({
+  className,
+  style,
+  ...props
+}: React.ComponentProps<typeof SidebarInset>) {
   return (
     <SidebarInset
       className={cn(
@@ -11,6 +24,7 @@ function AppPageShell({ className, ...props }: React.ComponentProps<typeof Sideb
         "md:m-2 md:rounded-[12px]",
         className,
       )}
+      style={style}
       {...props}
     />
   );

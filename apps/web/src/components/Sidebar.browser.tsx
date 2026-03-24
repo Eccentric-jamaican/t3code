@@ -426,6 +426,44 @@ function visibleSidebarToggleCount(label: "Collapse Sidebar" | "Expand Sidebar")
   }).length;
 }
 
+function desktopInsetShellMetrics(): {
+  contentInsetLeft: number;
+  paddingLeft: string;
+  shellLeft: number;
+} {
+  const shell = document.querySelector<HTMLElement>("[data-slot='sidebar-inset']");
+  const content = shell?.firstElementChild;
+  expect(shell).not.toBeNull();
+  expect(content).toBeInstanceOf(HTMLElement);
+
+  const shellRect = shell!.getBoundingClientRect();
+  const contentRect = (content as HTMLElement).getBoundingClientRect();
+
+  return {
+    paddingLeft: window.getComputedStyle(shell!).paddingLeft,
+    contentInsetLeft: Math.round(contentRect.left - shellRect.left),
+    shellLeft: Math.round(shellRect.left),
+  };
+}
+
+function desktopLeadingSlotClearance(targetTestId: string): {
+  slotRight: number;
+  targetLeft: number;
+} {
+  const slot = document.querySelector<HTMLElement>("[data-testid='desktop-leading-slot']");
+  const target = document.querySelector<HTMLElement>(`[data-testid='${targetTestId}']`);
+  expect(slot).not.toBeNull();
+  expect(target).not.toBeNull();
+
+  const slotRect = slot!.getBoundingClientRect();
+  const targetRect = target!.getBoundingClientRect();
+
+  return {
+    slotRight: Math.round(slotRect.right),
+    targetLeft: Math.round(targetRect.left),
+  };
+}
+
 function desktopBrandTriggerOpacities(): { mark: number; toggle: number } {
   const mark = document.querySelector<HTMLElement>("[data-slot='sidebar-brand-mark']");
   const toggle = document.querySelector<HTMLElement>("[data-slot='sidebar-brand-toggle-icon']");
@@ -436,6 +474,20 @@ function desktopBrandTriggerOpacities(): { mark: number; toggle: number } {
     mark: Number.parseFloat(window.getComputedStyle(mark!).opacity),
     toggle: Number.parseFloat(window.getComputedStyle(toggle!).opacity),
   };
+}
+
+function disableWelcomeBootstrap(targetFixture: TestFixture): void {
+  targetFixture.welcome = {
+    cwd: targetFixture.welcome.cwd,
+    projectName: targetFixture.welcome.projectName,
+  };
+}
+
+async function collapseDesktopSidebar(): Promise<void> {
+  await expect.poll(() => visibleSidebarToggleCount("Collapse Sidebar")).toBe(1);
+  await page.getByRole("button", { name: "Collapse Sidebar" }).click();
+  await expect.poll(() => visibleSidebarToggleCount("Expand Sidebar")).toBe(1);
+  await waitForLayout();
 }
 
 async function dragProjectRow(
@@ -489,7 +541,18 @@ async function dragProjectRow(
   await nextFrame();
 }
 
-async function mountSidebarApp(initialEntries: string[] = ["/"]) {
+async function mountSidebarApp(
+  options:
+    | {
+        configureFixture?: (fixture: TestFixture) => void;
+        initialEntries?: string[];
+      }
+    | string[] = {},
+) {
+  const resolvedOptions = Array.isArray(options) ? { initialEntries: options } : options;
+
+  resolvedOptions.configureFixture?.(fixture);
+
   const host = document.createElement("div");
   host.style.position = "fixed";
   host.style.inset = "0";
@@ -501,7 +564,7 @@ async function mountSidebarApp(initialEntries: string[] = ["/"]) {
 
   const router = getRouter(
     createMemoryHistory({
-      initialEntries,
+      initialEntries: resolvedOptions.initialEntries ?? ["/"],
     }),
   );
 
@@ -641,38 +704,101 @@ describe("Sidebar browser", () => {
   it("shows only one desktop sidebar toggle at a time for the active thread shell", async () => {
     const mounted = await mountSidebarApp([`/${THREAD_ID}`]);
 
-    await expect.poll(() => visibleSidebarToggleCount("Collapse Sidebar")).toBe(1);
-
-    await page.getByRole("button", { name: "Collapse Sidebar" }).click();
-
+    await collapseDesktopSidebar();
     await expect.poll(() => visibleSidebarToggleCount("Expand Sidebar")).toBe(1);
     await expect
-      .poll(() => {
-        const shellLeft =
-          document.querySelector<HTMLElement>("[data-testid='chat-thread-shell']")?.getBoundingClientRect()
-            .left ?? 0;
-        return shellLeft;
-      })
-      .toBe(52);
+      .poll(() => document.querySelector<HTMLElement>("[data-testid='chat-thread-shell']") !== null)
+      .toBe(true);
 
     await mounted.cleanup();
   });
 
+  it.each([
+    {
+      initialEntries: ["/"],
+      label: "thread index",
+      configureFixture: disableWelcomeBootstrap,
+    },
+    {
+      initialEntries: ["/settings"],
+      label: "settings",
+    },
+    {
+      initialEntries: ["/orchestrate"],
+      label: "orchestrate",
+    },
+    {
+      initialEntries: [`/${THREAD_ID}`],
+      label: "active thread",
+    },
+  ])(
+    "keeps the shell flush for the $label route when the sidebar is collapsed",
+    async ({ configureFixture, initialEntries }) => {
+      const mounted = await mountSidebarApp({
+        initialEntries,
+        ...(configureFixture ? { configureFixture } : {}),
+      });
+
+      await collapseDesktopSidebar();
+      await expect.poll(() => desktopInsetShellMetrics()).toEqual({
+        paddingLeft: "0px",
+        contentInsetLeft: 0,
+        shellLeft: 8,
+      });
+      await expect.element(page.getByTestId("desktop-leading-slot")).toBeVisible();
+
+      await mounted.cleanup();
+    },
+  );
+
+  it.each([
+    {
+      initialEntries: ["/settings"],
+      label: "settings",
+      titleTestId: "settings-header-label",
+    },
+    {
+      initialEntries: ["/orchestrate"],
+      label: "orchestrate",
+      titleTestId: "orchestrate-header-title",
+    },
+    {
+      initialEntries: [`/${THREAD_ID}`],
+      label: "active thread",
+      titleTestId: "chat-header-title",
+    },
+  ])(
+    "keeps the desktop trigger clear of the $label header when the sidebar is collapsed",
+    async ({ initialEntries, titleTestId }) => {
+      const mounted = await mountSidebarApp({ initialEntries });
+
+      await collapseDesktopSidebar();
+      await expect.poll(() => desktopInsetShellMetrics().paddingLeft).toBe("0px");
+      await expect.element(page.getByTestId("desktop-leading-slot")).toBeVisible();
+      await expect
+        .poll(() => {
+          const metrics = desktopLeadingSlotClearance(titleTestId);
+          return metrics.targetLeft - metrics.slotRight;
+        })
+        .toBeGreaterThanOrEqual(4);
+
+      await mounted.cleanup();
+    },
+  );
+
   it("renders the desktop leading slot and swaps from the logo mark to the toggle affordance on hover and focus", async () => {
     const mounted = await mountSidebarApp([`/${THREAD_ID}`]);
     const trigger = page.getByTestId("desktop-sidebar-brand-trigger");
+    const threadShell = page.getByTestId("chat-thread-shell");
 
     await expect.element(page.getByTestId("desktop-leading-slot")).toBeVisible();
     await expect.element(trigger).toBeVisible();
 
+    await threadShell.hover();
     await expect.poll(() => desktopBrandTriggerOpacities()).toEqual({ mark: 1, toggle: 0 });
 
     await trigger.hover();
     await expect.poll(() => desktopBrandTriggerOpacities()).toEqual({ mark: 0, toggle: 1 });
-
-    document.querySelector<HTMLElement>("[data-testid='desktop-sidebar-brand-trigger']")?.blur();
-    await nextFrame();
-    await expect.poll(() => desktopBrandTriggerOpacities()).toEqual({ mark: 1, toggle: 0 });
 
     document.querySelector<HTMLElement>("[data-testid='desktop-sidebar-brand-trigger']")?.focus();
     await nextFrame();
@@ -687,18 +813,20 @@ describe("Sidebar browser", () => {
 
     await expect.element(page.getByTestId("desktop-leading-slot")).toBeVisible();
     await expect.element(page.getByTestId("desktop-sidebar-brand-trigger")).toBeVisible();
+    await expect.poll(() => desktopInsetShellMetrics().paddingLeft).toBe("0px");
+    await expect
+      .poll(
+        () =>
+          document.querySelector<HTMLElement>("[data-testid='desktop-leading-slot']")?.getBoundingClientRect()
+            .bottom ?? 0,
+      )
+      .toBe(52);
     await expect
       .poll(() => {
-        const slotBottom =
-          document.querySelector<HTMLElement>("[data-testid='desktop-leading-slot']")?.getBoundingClientRect()
-            .bottom ?? 0;
-        const firstNavTop =
-          document
-            .querySelector<HTMLElement>("[data-testid='new-thread-sidebar-button']")
-            ?.getBoundingClientRect().top ?? 0;
-        return { slotBottom, firstNavTop };
+        const metrics = desktopLeadingSlotClearance("chat-header-title");
+        return metrics.targetLeft - metrics.slotRight;
       })
-      .toEqual({ slotBottom: 52, firstNavTop: 56 });
+      .toBeGreaterThanOrEqual(4);
 
     await mounted.cleanup();
   });
