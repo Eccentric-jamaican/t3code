@@ -9,7 +9,7 @@ export const TASK_STATE_ORDER: readonly TaskState[] = [
   "done",
 ];
 
-export const DEFAULT_HIDDEN_STATES: readonly TaskState[] = ["done"];
+export const DEFAULT_HIDDEN_STATES: readonly TaskState[] = [];
 
 export function visibleTaskStates(hiddenStates: ReadonlySet<TaskState>): TaskState[] {
   return TASK_STATE_ORDER.filter((state) => !hiddenStates.has(state));
