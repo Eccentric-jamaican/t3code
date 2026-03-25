@@ -45,7 +45,7 @@ import { gitBranchesQueryOptions, gitCreateWorktreeMutationOptions } from "~/lib
 import { projectSearchEntriesQueryOptions } from "~/lib/projectReactQuery";
 import { serverConfigQueryOptions, serverQueryKeys } from "~/lib/serverReactQuery";
 
-import { isElectron } from "../env";
+import { isElectron, isElectronRuntime } from "../env";
 import { parseDiffRouteSearch, stripDiffSearchParams } from "../diffRouteSearch";
 import {
   type ComposerSlashCommand,
@@ -152,7 +152,6 @@ import {
   VisualStudioCode,
   Zed,
 } from "./Icons";
-import { useAppPageDesktopLeadingSlotSafeHeaderStyle } from "./AppPageShell";
 import { cn, isMacPlatform, isWindowsPlatform } from "~/lib/utils";
 import { Badge } from "./ui/badge";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
@@ -491,6 +490,7 @@ interface ChatViewProps {
 }
 
 export default function ChatView({ threadId }: ChatViewProps) {
+  const usesDesktopAppChrome = isElectronRuntime();
   const threads = useStore((store) => store.threads);
   const projects = useStore((store) => store.projects);
   const tasks = useStore((store) => store.tasks);
@@ -499,7 +499,6 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const setStoreThreadError = useStore((store) => store.setError);
   const setStoreThreadBranch = useStore((store) => store.setThreadBranch);
   const { settings } = useAppSettings();
-  const desktopLeadingSlotSafeHeaderStyle = useAppPageDesktopLeadingSlotSafeHeaderStyle();
   const navigate = useNavigate();
   const rawSearch = useSearch({
     strict: false,
@@ -3291,12 +3290,10 @@ export default function ChatView({ threadId }: ChatViewProps) {
             </div>
           </header>
         )}
-        {isElectron && (
+        {usesDesktopAppChrome && (
           <div
-            className={cn(
-              "drag-region flex h-[52px] shrink-0 items-center gap-2 px-3 sm:px-5",
-            )}
-            style={desktopLeadingSlotSafeHeaderStyle}
+            className="flex h-[var(--app-desktop-content-header-height)] shrink-0 items-center px-3 sm:px-5"
+            data-testid="chat-empty-top-row"
           >
             <span className="text-xs text-muted-foreground/50">No active thread</span>
           </div>
@@ -3318,10 +3315,10 @@ export default function ChatView({ threadId }: ChatViewProps) {
       {/* Top bar */}
       <header
         className={cn(
-          "shrink-0 px-3 sm:px-5",
-          isElectron ? "drag-region flex h-[52px] items-center" : "py-2 sm:py-3",
+          "flex shrink-0 items-center px-3 sm:px-5",
+          usesDesktopAppChrome ? "h-[var(--app-desktop-content-header-height)]" : "py-2 sm:py-3",
         )}
-        style={desktopLeadingSlotSafeHeaderStyle}
+        data-testid="chat-top-header"
       >
         <ChatHeader
           activeThreadId={activeThread.id}
@@ -3997,7 +3994,10 @@ const ChatHeader = memo(function ChatHeader({
           </Badge>
         ) : null}
       </div>
-      <div className="@container/header-actions flex min-w-0 flex-1 items-center justify-end gap-2 @sm/header-actions:gap-3">
+      <div
+        className="@container/header-actions desktop-top-edge-actions-safe flex min-w-0 flex-1 items-center justify-end gap-2 @sm/header-actions:gap-3"
+        data-testid="chat-header-actions"
+      >
         {activeProjectScripts && (
           <ProjectScriptsControl
             scripts={activeProjectScripts}

@@ -6,3 +6,10 @@
 export const isElectron =
   typeof window !== "undefined" &&
   (window.desktopBridge !== undefined || window.nativeApi !== undefined);
+
+export function isElectronRuntime(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    (window.desktopBridge !== undefined || window.nativeApi !== undefined)
+  );
+}

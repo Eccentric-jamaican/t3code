@@ -2,6 +2,7 @@
 import "../index.css";
 
 import {
+  type BrowserSessionSnapshot,
   EventId,
   type DesktopBridge,
   ORCHESTRATION_WS_METHODS,
@@ -23,6 +24,8 @@ import { page } from "vitest/browser";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
+import { applyDesktopWindowChromeMetrics } from "../desktopWindowChrome";
+import { useBrowserPaneStore } from "../browserPaneStore";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { getRouter } from "../router";
 import { useStore } from "../store";
@@ -710,6 +713,146 @@ function isElementFullyVisible(element: HTMLElement): boolean {
   );
 }
 
+function desktopTitlebarBandMetrics(): {
+  bandBottom: number;
+  bandHeight: number;
+} {
+  const band = document.querySelector<HTMLElement>("[data-testid='desktop-titlebar-band']");
+  expect(band).not.toBeNull();
+
+  const bandRect = band!.getBoundingClientRect();
+
+  return {
+    bandBottom: Math.round(bandRect.bottom),
+    bandHeight: Math.round(bandRect.height),
+  };
+}
+
+function desktopTitlebarBandClearance(targetTestId: string): {
+  bandBottom: number;
+  targetTop: number;
+} {
+  const band = document.querySelector<HTMLElement>("[data-testid='desktop-titlebar-band']");
+  const target = document.querySelector<HTMLElement>(`[data-testid='${targetTestId}']`);
+  expect(band).not.toBeNull();
+  expect(target).not.toBeNull();
+
+  const bandRect = band!.getBoundingClientRect();
+  const targetRect = target!.getBoundingClientRect();
+
+  return {
+    bandBottom: Math.round(bandRect.bottom),
+    targetTop: Math.round(targetRect.top),
+  };
+}
+
+function desktopCaptionButtonLaneMetrics(targetTestId: string): {
+  laneWidth: number;
+  targetRight: number;
+} {
+  const target = document.querySelector<HTMLElement>(`[data-testid='${targetTestId}']`);
+  expect(target).not.toBeNull();
+
+  const actionElements = Array.from(
+    target!.querySelectorAll<HTMLElement>("button, [role='button'], a, input, textarea, select"),
+  );
+  const targetRight = actionElements.length
+    ? Math.max(...actionElements.map((element) => element.getBoundingClientRect().right))
+    : target!.getBoundingClientRect().right;
+  const laneWidth = Number.parseFloat(
+    window.getComputedStyle(document.documentElement).getPropertyValue("--desktop-caption-button-lane-width"),
+  );
+
+  return {
+    laneWidth: Number.isFinite(laneWidth) ? Math.round(laneWidth) : 0,
+    targetRight: Math.round(targetRight),
+  };
+}
+
+function computedBackgroundColorByTestId(testId: string): string {
+  const element = document.querySelector<HTMLElement>(`[data-testid='${testId}']`);
+  expect(element).not.toBeNull();
+  return window.getComputedStyle(element!).backgroundColor;
+}
+
+function selectorBackgroundColor(selector: string): string {
+  const element = document.querySelector<HTMLElement>(selector);
+  expect(element).not.toBeNull();
+  return window.getComputedStyle(element!).backgroundColor;
+}
+
+function sidebarSurfaceWidth(): number {
+  const element = document.querySelector<HTMLElement>("[data-testid='desktop-titlebar-band-sidebar-surface']");
+  expect(element).not.toBeNull();
+  return Math.round(element!.getBoundingClientRect().width);
+}
+
+function elementHeightByTestId(testId: string): number {
+  const element = document.querySelector<HTMLElement>(`[data-testid='${testId}']`);
+  expect(element).not.toBeNull();
+  return Math.round(element!.getBoundingClientRect().height);
+}
+
+function createDesktopBrowserSnapshot(projectId: ProjectId): BrowserSessionSnapshot {
+  return {
+    paneOpen: true,
+    paneProjectId: projectId,
+    paneBounds: {
+      x: 980,
+      y: 22,
+      width: 420,
+      height: 860,
+    },
+    session: {
+      sessionId: "browser-session-chat-test",
+      projectId,
+      inspectMode: false,
+      hasSelection: false,
+      navigation: {
+        url: "https://www.google.com/search",
+        title: "Google",
+        canGoBack: true,
+        canGoForward: false,
+        isLoading: false,
+        lastCommittedAt: NOW_ISO,
+      },
+      createdAt: NOW_ISO,
+      updatedAt: NOW_ISO,
+    },
+  };
+}
+
+function createDesktopBrowserBridge(projectId: ProjectId): DesktopBridge["browser"] {
+  return {
+    getState: async () => createDesktopBrowserSnapshot(projectId),
+    open: async () => createDesktopBrowserSnapshot(projectId),
+    closePane: async () => undefined,
+    navigate: async (input) => ({
+      ...createDesktopBrowserSnapshot(projectId),
+      session: {
+        ...createDesktopBrowserSnapshot(projectId).session!,
+        navigation: {
+          ...createDesktopBrowserSnapshot(projectId).session!.navigation,
+          url: input.url,
+        },
+      },
+    }),
+    back: async () => createDesktopBrowserSnapshot(projectId),
+    forward: async () => createDesktopBrowserSnapshot(projectId),
+    reload: async () => createDesktopBrowserSnapshot(projectId),
+    kill: async () => undefined,
+    setInspectMode: async (input) => ({
+      ...createDesktopBrowserSnapshot(projectId),
+      session: {
+        ...createDesktopBrowserSnapshot(projectId).session!,
+        inspectMode: input.enabled,
+      },
+    }),
+    captureInspectSelection: async () => null,
+    onEvent: () => () => {},
+  };
+}
+
 function findFirstTextNode(root: Node): Text | null {
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   let current = walker.nextNode();
@@ -868,6 +1011,7 @@ async function mountChatView(options: {
   host.style.display = "grid";
   host.style.overflow = "hidden";
   document.body.append(host);
+  applyDesktopWindowChromeMetrics(document.documentElement);
 
   const router = getRouter(
     createMemoryHistory({
@@ -939,6 +1083,13 @@ describe("ChatView timeline estimator parity (full app)", () => {
     wsRequests.length = 0;
     window.desktopBridge = {
       getWsUrl: () => `ws://${window.location.host}`,
+        getWindowChromeMetrics: () => ({
+          platform: "win32",
+          titlebarHeightPx: 22,
+          leadingInsetPx: 0,
+          trailingInsetPx: 138,
+          captionButtonLaneWidthPx: 104,
+        }),
       openExternal: async () => true,
       pickFolder: async () => null,
       confirm: async () => true,
@@ -947,6 +1098,10 @@ describe("ChatView timeline estimator parity (full app)", () => {
       draftsByThreadId: {},
       draftThreadsByThreadId: {},
       projectDraftThreadIdByProjectId: {},
+    });
+    useBrowserPaneStore.setState({
+      open: false,
+      width: 420,
     });
     useStore.setState({
       projects: [],
@@ -957,6 +1112,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
   afterEach(() => {
     Reflect.deleteProperty(window, "desktopBridge");
+    applyDesktopWindowChromeMetrics(document.documentElement);
     document.body.innerHTML = "";
   });
 
@@ -975,31 +1131,153 @@ describe("ChatView timeline estimator parity (full app)", () => {
       const sidebarContainer = document.querySelector<HTMLElement>("[data-slot='sidebar-container']");
       const header = document.querySelector<HTMLElement>("header");
       const headerTitle = document.querySelector<HTMLElement>("[data-testid='chat-header-title']");
+      const headerActions = document.querySelector<HTMLElement>("[data-testid='chat-header-actions']");
+      const gitActionOptions = document.querySelector<HTMLElement>(
+        "button[aria-label='Git action options']",
+      );
+      const diffToggle = document.querySelector<HTMLElement>("button[aria-label='Toggle diff panel']");
 
       expect(sidebarInset).not.toBeNull();
       expect(shell).not.toBeNull();
       expect(sidebarContainer).not.toBeNull();
       expect(header).not.toBeNull();
       expect(headerTitle).not.toBeNull();
+      expect(headerActions).not.toBeNull();
+      expect(gitActionOptions).not.toBeNull();
+      expect(diffToggle).not.toBeNull();
+      expect(desktopTitlebarBandMetrics().bandHeight).toBe(22);
+      expect(elementHeightByTestId("chat-top-header")).toBe(40);
+      expect(elementHeightByTestId("sidebar-top-header")).toBe(40);
+      expect(computedBackgroundColorByTestId("desktop-titlebar-band-main-surface")).toBe(
+        selectorBackgroundColor("[data-testid='chat-view-root']"),
+      );
+      expect(computedBackgroundColorByTestId("desktop-titlebar-band-sidebar-surface")).toBe(
+        selectorBackgroundColor("[data-slot='sidebar-container']"),
+      );
+
+      expect(
+        desktopTitlebarBandClearance("chat-header-title").targetTop -
+          desktopTitlebarBandClearance("chat-header-title").bandBottom,
+      ).toBeGreaterThanOrEqual(0);
+      expect(
+        desktopTitlebarBandClearance("chat-header-actions").targetTop -
+          desktopTitlebarBandClearance("chat-header-actions").bandBottom,
+      ).toBeGreaterThanOrEqual(0);
+      expect(window.innerWidth - desktopCaptionButtonLaneMetrics("chat-header-actions").laneWidth).toBeGreaterThanOrEqual(
+        desktopCaptionButtonLaneMetrics("chat-header-actions").targetRight,
+      );
 
       await collapseDesktopSidebar();
 
       const shellStyle = window.getComputedStyle(shell!);
       const sidebarInsetStyle = window.getComputedStyle(sidebarInset!);
       const shellRect = shell!.getBoundingClientRect();
-      const slotRect =
-        document.querySelector<HTMLElement>("[data-testid='desktop-leading-slot']")?.getBoundingClientRect() ??
-        null;
-      const titleRect = headerTitle!.getBoundingClientRect();
 
       expect(Number.parseFloat(shellStyle.borderTopLeftRadius)).toBeGreaterThan(0);
       expect(Number.parseFloat(shellStyle.borderTopRightRadius)).toBeGreaterThan(0);
       expect(shellRect.height).toBeLessThanOrEqual(window.innerHeight + 1);
       expect(sidebarInsetStyle.paddingLeft).toBe("0px");
-      expect(slotRect).not.toBeNull();
-      expect(Math.round(titleRect.left - slotRect!.right)).toBeGreaterThanOrEqual(4);
+      expect(sidebarSurfaceWidth()).toBe(52);
+      expect(elementHeightByTestId("chat-top-header")).toBe(40);
+      expect(elementHeightByTestId("sidebar-top-header")).toBe(40);
+      expect(computedBackgroundColorByTestId("desktop-titlebar-band-main-surface")).toBe(
+        selectorBackgroundColor("[data-testid='chat-view-root']"),
+      );
+      expect(computedBackgroundColorByTestId("desktop-titlebar-band-sidebar-surface")).toBe(
+        selectorBackgroundColor("[data-slot='sidebar-container']"),
+      );
+      expect(
+        desktopTitlebarBandClearance("chat-header-title").targetTop -
+          desktopTitlebarBandClearance("chat-header-title").bandBottom,
+      ).toBeGreaterThanOrEqual(0);
+      expect(
+        desktopTitlebarBandClearance("chat-header-actions").targetTop -
+          desktopTitlebarBandClearance("chat-header-actions").bandBottom,
+      ).toBeGreaterThanOrEqual(0);
+      expect(window.innerWidth - desktopCaptionButtonLaneMetrics("chat-header-actions").laneWidth).toBeGreaterThanOrEqual(
+        desktopCaptionButtonLaneMetrics("chat-header-actions").targetRight,
+      );
+      expect(isElementFullyVisible(gitActionOptions!)).toBe(true);
+      expect(isElementFullyVisible(diffToggle!)).toBe(true);
       expect(window.getComputedStyle(sidebarContainer!).borderRightWidth).toBe("0px");
       expect(window.getComputedStyle(header!).borderBottomWidth).toBe("0px");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps integrated browser and diff top chrome below the desktop titlebar band", async () => {
+    window.desktopBridge = {
+      ...window.desktopBridge,
+      browser: createDesktopBrowserBridge(PROJECT_ID),
+    } as DesktopBridge;
+    useBrowserPaneStore.setState({
+      open: true,
+      width: 420,
+    });
+
+    const mounted = await mountChatView({
+      viewport: {
+        ...DEFAULT_VIEWPORT,
+        name: "desktop-wide",
+        width: 1440,
+        height: 960,
+      },
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-top-chrome-check" as MessageId,
+        targetText: "check top chrome",
+      }),
+    });
+
+    try {
+      const diffToggle = await waitForElement(
+        () => document.querySelector<HTMLElement>("button[aria-label='Toggle diff panel']"),
+        "Unable to find the diff toggle.",
+      );
+
+      diffToggle.click();
+      await waitForLayout();
+
+      await expect
+        .poll(
+          () =>
+            document.querySelector<HTMLElement>("[data-testid='integrated-browser-header-actions']") ??
+            null,
+        )
+        .not.toBeNull();
+      await expect
+        .poll(
+          () =>
+            document.querySelector<HTMLElement>("[data-testid='diff-panel-header-actions']") ?? null,
+        )
+        .not.toBeNull();
+      expect(desktopTitlebarBandMetrics().bandHeight).toBe(22);
+      expect(elementHeightByTestId("chat-top-header")).toBe(40);
+      expect(elementHeightByTestId("integrated-browser-top-header")).toBe(40);
+      expect(elementHeightByTestId("diff-panel-top-header")).toBe(40);
+
+      expect(
+        desktopTitlebarBandClearance("chat-header-actions").targetTop -
+          desktopTitlebarBandClearance("chat-header-actions").bandBottom,
+      ).toBeGreaterThanOrEqual(0);
+      expect(window.innerWidth - desktopCaptionButtonLaneMetrics("chat-header-actions").laneWidth).toBeGreaterThanOrEqual(
+        desktopCaptionButtonLaneMetrics("chat-header-actions").targetRight,
+      );
+      expect(
+        desktopTitlebarBandClearance("integrated-browser-header-actions").targetTop -
+          desktopTitlebarBandClearance("integrated-browser-header-actions").bandBottom,
+      ).toBeGreaterThanOrEqual(0);
+      expect(
+        window.innerWidth - desktopCaptionButtonLaneMetrics("integrated-browser-header-actions").laneWidth,
+      ).toBeGreaterThanOrEqual(desktopCaptionButtonLaneMetrics("integrated-browser-header-actions").targetRight);
+      expect(
+        desktopTitlebarBandClearance("diff-panel-header-actions").targetTop -
+          desktopTitlebarBandClearance("diff-panel-header-actions").bandBottom,
+      ).toBeGreaterThanOrEqual(0);
+      expect(window.innerWidth - desktopCaptionButtonLaneMetrics("diff-panel-header-actions").laneWidth).toBeGreaterThanOrEqual(
+        desktopCaptionButtonLaneMetrics("diff-panel-header-actions").targetRight,
+      );
+      expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth + 1);
     } finally {
       await mounted.cleanup();
     }

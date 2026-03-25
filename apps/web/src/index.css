@@ -94,8 +94,15 @@
   --app-page-shell-canvas: var(--app-workspace-canvas);
   --app-page-shell-surface: var(--background);
   --app-thread-surface: color-mix(in srgb, var(--background) 98%, var(--color-neutral-900));
+  --app-desktop-main-surface: var(--app-page-shell-surface);
+  --app-desktop-content-header-height: 40px;
+  --app-desktop-top-edge-action-keepout-width: var(--desktop-caption-button-lane-width, 0px);
   --app-page-shell-border: color-mix(in srgb, var(--border) 90%, transparent);
   --app-page-shell-shadow: color-mix(in srgb, var(--color-neutral-950) 16%, transparent);
+  --desktop-native-leading-safe-area-width: 0px;
+  --desktop-native-trailing-safe-area-width: 0px;
+  --desktop-caption-button-lane-width: 0px;
+  --desktop-native-titlebar-height: 0px;
 
   @variant dark {
     color-scheme: dark;
@@ -129,8 +136,17 @@
     --app-page-shell-canvas: var(--app-workspace-canvas);
     --app-page-shell-surface: color-mix(in srgb, var(--background) 82%, var(--color-neutral-200));
     --app-thread-surface: color-mix(in srgb, var(--background) 92%, var(--color-white));
+    --app-desktop-main-surface: var(--app-page-shell-surface);
+    --app-desktop-content-header-height: 40px;
+    --app-desktop-top-edge-action-keepout-width: var(--desktop-caption-button-lane-width, 0px);
     --app-page-shell-border: color-mix(in srgb, var(--color-white) 7%, transparent);
     --app-page-shell-shadow: color-mix(in srgb, var(--color-black) 46%, transparent);
+  }
+}
+
+@media (min-width: 768px) {
+  .desktop-top-edge-actions-safe {
+    padding-right: var(--app-desktop-top-edge-action-keepout-width);
   }
 }
 

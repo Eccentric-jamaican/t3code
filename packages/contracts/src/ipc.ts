@@ -102,8 +102,17 @@ export interface DesktopUpdateActionResult {
   state: DesktopUpdateState;
 }
 
+export interface DesktopWindowChromeMetrics {
+  platform: "darwin" | "win32" | "linux";
+  titlebarHeightPx: number;
+  leadingInsetPx: number;
+  trailingInsetPx: number;
+  captionButtonLaneWidthPx: number;
+}
+
 export interface DesktopBridge {
   getWsUrl: () => string | null;
+  getWindowChromeMetrics: () => DesktopWindowChromeMetrics;
   pickFolder: () => Promise<string | null>;
   confirm: (message: string) => Promise<boolean>;
   showContextMenu: <T extends string>(

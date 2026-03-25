@@ -2049,7 +2049,10 @@ export default function Sidebar() {
   return (
     <>
       {isElectron ? (
-        <SidebarHeader className="drag-region h-[52px] px-4 py-0">
+        <SidebarHeader
+          className="h-[var(--app-desktop-content-header-height)] px-4 py-0"
+          data-testid="sidebar-top-header"
+        >
           <div className="flex h-full items-center justify-end gap-2">
             {showDesktopUpdateButton ? (
               <Tooltip>
@@ -2077,7 +2080,10 @@ export default function Sidebar() {
           </div>
         </SidebarHeader>
       ) : (
-        <SidebarHeader className="h-[52px] px-4 py-0" />
+        <SidebarHeader
+          className="h-[var(--app-desktop-content-header-height)] px-4 py-0"
+          data-testid="sidebar-top-header"
+        />
       )}
 
       <div

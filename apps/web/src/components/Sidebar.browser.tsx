@@ -1,6 +1,7 @@
 import "../index.css";
 
 import {
+  type BrowserSessionSnapshot,
   ORCHESTRATION_WS_CHANNELS,
   ORCHESTRATION_WS_METHODS,
   type ClientOrchestrationCommand,
@@ -21,6 +22,8 @@ import { page } from "vitest/browser";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
+import { useBrowserPaneStore } from "../browserPaneStore";
+import { applyDesktopWindowChromeMetrics } from "../desktopWindowChrome";
 import { getRouter } from "../router";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useStore } from "../store";
@@ -446,21 +449,149 @@ function desktopInsetShellMetrics(): {
   };
 }
 
-function desktopLeadingSlotClearance(targetTestId: string): {
-  slotRight: number;
-  targetLeft: number;
+function desktopTitlebarBandMetrics(): {
+  bandBottom: number;
+  bandHeight: number;
 } {
-  const slot = document.querySelector<HTMLElement>("[data-testid='desktop-leading-slot']");
+  const band = document.querySelector<HTMLElement>("[data-testid='desktop-titlebar-band']");
+  expect(band).not.toBeNull();
+
+  const bandRect = band!.getBoundingClientRect();
+
+  return {
+    bandBottom: Math.round(bandRect.bottom),
+    bandHeight: Math.round(bandRect.height),
+  };
+}
+
+function desktopTitlebarBandClearance(targetTestId: string): {
+  bandBottom: number;
+  targetTop: number;
+} {
+  const band = document.querySelector<HTMLElement>("[data-testid='desktop-titlebar-band']");
   const target = document.querySelector<HTMLElement>(`[data-testid='${targetTestId}']`);
-  expect(slot).not.toBeNull();
+  expect(band).not.toBeNull();
   expect(target).not.toBeNull();
 
-  const slotRect = slot!.getBoundingClientRect();
+  const bandRect = band!.getBoundingClientRect();
   const targetRect = target!.getBoundingClientRect();
 
   return {
-    slotRight: Math.round(slotRect.right),
-    targetLeft: Math.round(targetRect.left),
+    bandBottom: Math.round(bandRect.bottom),
+    targetTop: Math.round(targetRect.top),
+  };
+}
+
+function desktopCaptionButtonLaneMetrics(targetTestId: string): {
+  laneWidth: number;
+  targetRight: number;
+} {
+  const target = document.querySelector<HTMLElement>(`[data-testid='${targetTestId}']`);
+  expect(target).not.toBeNull();
+
+  const actionElements = Array.from(
+    target!.querySelectorAll<HTMLElement>("button, [role='button'], a, input, textarea, select"),
+  );
+  const targetRight = actionElements.length
+    ? Math.max(...actionElements.map((element) => element.getBoundingClientRect().right))
+    : target!.getBoundingClientRect().right;
+  const laneWidth = Number.parseFloat(
+    window.getComputedStyle(document.documentElement).getPropertyValue("--desktop-caption-button-lane-width"),
+  );
+
+  return {
+    laneWidth: Number.isFinite(laneWidth) ? Math.round(laneWidth) : 0,
+    targetRight: Math.round(targetRight),
+  };
+}
+
+function computedBackgroundColorByTestId(testId: string): string {
+  const element = document.querySelector<HTMLElement>(`[data-testid='${testId}']`);
+  expect(element).not.toBeNull();
+  return window.getComputedStyle(element!).backgroundColor;
+}
+
+function sidebarSurfaceBackgroundColor(): string {
+  const element = document.querySelector<HTMLElement>("[data-slot='sidebar-container']");
+  expect(element).not.toBeNull();
+  return window.getComputedStyle(element!).backgroundColor;
+}
+
+function sidebarSurfaceWidth(): number {
+  const element = document.querySelector<HTMLElement>("[data-testid='desktop-titlebar-band-sidebar-surface']");
+  expect(element).not.toBeNull();
+  return Math.round(element!.getBoundingClientRect().width);
+}
+
+function sidebarInsetBackgroundColor(): string {
+  const element = document.querySelector<HTMLElement>("[data-slot='sidebar-inset']");
+  expect(element).not.toBeNull();
+  return window.getComputedStyle(element!).backgroundColor;
+}
+
+function elementHeightByTestId(testId: string): number {
+  const element = document.querySelector<HTMLElement>(`[data-testid='${testId}']`);
+  expect(element).not.toBeNull();
+  return Math.round(element!.getBoundingClientRect().height);
+}
+
+function createDesktopBrowserSnapshot(projectId: ProjectId): BrowserSessionSnapshot {
+  return {
+    paneOpen: true,
+    paneProjectId: projectId,
+    paneBounds: {
+      x: 1_020,
+      y: 22,
+      width: 420,
+      height: 760,
+    },
+    session: {
+      sessionId: "browser-session-sidebar-test",
+      projectId,
+      inspectMode: false,
+      hasSelection: false,
+      navigation: {
+        url: "https://www.google.com/search",
+        title: "Google",
+        canGoBack: true,
+        canGoForward: false,
+        isLoading: false,
+        lastCommittedAt: NOW_ISO,
+      },
+      createdAt: NOW_ISO,
+      updatedAt: NOW_ISO,
+    },
+  };
+}
+
+function createDesktopBrowserBridge(projectId: ProjectId): DesktopBridge["browser"] {
+  return {
+    getState: async () => createDesktopBrowserSnapshot(projectId),
+    open: async () => createDesktopBrowserSnapshot(projectId),
+    closePane: async () => undefined,
+    navigate: async (input) => ({
+      ...createDesktopBrowserSnapshot(projectId),
+      session: {
+        ...createDesktopBrowserSnapshot(projectId).session!,
+        navigation: {
+          ...createDesktopBrowserSnapshot(projectId).session!.navigation,
+          url: input.url,
+        },
+      },
+    }),
+    back: async () => createDesktopBrowserSnapshot(projectId),
+    forward: async () => createDesktopBrowserSnapshot(projectId),
+    reload: async () => createDesktopBrowserSnapshot(projectId),
+    kill: async () => undefined,
+    setInspectMode: async (input) => ({
+      ...createDesktopBrowserSnapshot(projectId),
+      session: {
+        ...createDesktopBrowserSnapshot(projectId).session!,
+        inspectMode: input.enabled,
+      },
+    }),
+    captureInspectSelection: async () => null,
+    onEvent: () => () => {},
   };
 }
 
@@ -561,6 +692,7 @@ async function mountSidebarApp(
   host.style.display = "grid";
   host.style.overflow = "hidden";
   document.body.append(host);
+  applyDesktopWindowChromeMetrics(document.documentElement);
 
   const router = getRouter(
     createMemoryHistory({
@@ -605,6 +737,13 @@ beforeEach(() => {
   nextSequence = fixture.snapshot.snapshotSequence + 1;
   window.desktopBridge = {
     getWsUrl: () => `ws://${window.location.host}`,
+    getWindowChromeMetrics: () => ({
+      platform: "win32",
+      titlebarHeightPx: 22,
+      leadingInsetPx: 0,
+      trailingInsetPx: 138,
+      captionButtonLaneWidthPx: 104,
+    }),
     openExternal: async () => true,
     pickFolder: async () => null,
     confirm: async () => true,
@@ -619,11 +758,16 @@ beforeEach(() => {
     draftThreadsByThreadId: {},
     projectDraftThreadIdByProjectId: {},
   });
+  useBrowserPaneStore.setState({
+    open: false,
+    width: 420,
+  });
 });
 
 afterEach(() => {
   worker.resetHandlers();
   Reflect.deleteProperty(window, "desktopBridge");
+  applyDesktopWindowChromeMetrics(document.documentElement);
 });
 
 describe("Sidebar browser", () => {
@@ -745,9 +889,167 @@ describe("Sidebar browser", () => {
         contentInsetLeft: 0,
         shellLeft: 8,
       });
+      await expect.poll(() => desktopTitlebarBandMetrics().bandHeight).toBe(22);
       await expect.element(page.getByTestId("desktop-leading-slot")).toBeVisible();
 
       await mounted.cleanup();
+    },
+  );
+
+  it.each([
+    {
+      collapseSidebar: false,
+      initialEntries: ["/orchestrate"],
+      label: "orchestrate expanded",
+      titleTestId: "orchestrate-header-title",
+      actionsTestId: "orchestrate-header-actions",
+      topHeaderTestId: "orchestrate-top-header",
+      kind: "orchestrate" as const,
+    },
+    {
+      collapseSidebar: true,
+      initialEntries: ["/orchestrate"],
+      label: "orchestrate collapsed",
+      titleTestId: "orchestrate-header-title",
+      actionsTestId: "orchestrate-header-actions",
+      topHeaderTestId: "orchestrate-top-header",
+      kind: "orchestrate" as const,
+    },
+    {
+      collapseSidebar: false,
+      initialEntries: [`/${THREAD_ID}`],
+      label: "active thread expanded",
+      titleTestId: "chat-header-title",
+      actionsTestId: "chat-header-actions",
+      topHeaderTestId: "chat-top-header",
+      kind: "fixed" as const,
+    },
+    {
+      collapseSidebar: true,
+      initialEntries: [`/${THREAD_ID}`],
+      label: "active thread collapsed",
+      titleTestId: "chat-header-title",
+      actionsTestId: "chat-header-actions",
+      topHeaderTestId: "chat-top-header",
+      kind: "fixed" as const,
+    },
+  ])(
+    "keeps the $label header below the desktop titlebar band",
+    async ({ collapseSidebar, initialEntries, titleTestId, actionsTestId, topHeaderTestId, kind }) => {
+      const mounted = await mountSidebarApp({ initialEntries });
+
+      if (collapseSidebar) {
+        await collapseDesktopSidebar();
+      }
+
+      await expect.poll(() => desktopTitlebarBandMetrics().bandHeight).toBe(22);
+      await expect
+        .poll(() => {
+          const metrics = desktopTitlebarBandClearance(titleTestId);
+          return metrics.targetTop - metrics.bandBottom;
+        })
+        .toBeGreaterThanOrEqual(0);
+      await expect
+        .poll(() => {
+          const metrics = desktopTitlebarBandClearance(actionsTestId);
+          return metrics.targetTop - metrics.bandBottom;
+        })
+        .toBeGreaterThanOrEqual(0);
+      await expect
+        .poll(() => {
+          const metrics = desktopCaptionButtonLaneMetrics(actionsTestId);
+          return window.innerWidth - metrics.laneWidth - metrics.targetRight;
+        })
+        .toBeGreaterThanOrEqual(0);
+      if (kind === "fixed") {
+        await expect.poll(() => elementHeightByTestId(topHeaderTestId)).toBe(40);
+      } else {
+        await expect.poll(() => elementHeightByTestId(topHeaderTestId)).toBeGreaterThanOrEqual(40);
+      }
+
+      await mounted.cleanup();
+    },
+  );
+
+  it("keeps integrated browser and diff top chrome below the desktop titlebar band", async () => {
+    window.desktopBridge = {
+      ...window.desktopBridge,
+      browser: createDesktopBrowserBridge(PROJECT_ID),
+    } as DesktopBridge;
+    useBrowserPaneStore.setState({
+      open: true,
+      width: 420,
+    });
+
+    const mounted = await mountSidebarApp({
+      initialEntries: [`/${THREAD_ID}?diff=1`],
+    });
+
+    await expect.element(page.getByTestId("integrated-browser-header-actions")).toBeVisible();
+    await expect.element(page.getByTestId("diff-panel-header-actions")).toBeVisible();
+    await expect.poll(() => desktopTitlebarBandMetrics().bandHeight).toBe(22);
+    await expect.poll(() => elementHeightByTestId("integrated-browser-top-header")).toBe(40);
+    await expect.poll(() => elementHeightByTestId("diff-panel-top-header")).toBe(40);
+
+    await expect
+      .poll(
+        () =>
+          desktopTitlebarBandClearance("integrated-browser-header-actions").targetTop -
+          desktopTitlebarBandClearance("integrated-browser-header-actions").bandBottom,
+      )
+      .toBeGreaterThanOrEqual(0);
+    await expect
+      .poll(() => {
+        const metrics = desktopCaptionButtonLaneMetrics("integrated-browser-header-actions");
+        return window.innerWidth - metrics.laneWidth - metrics.targetRight;
+      })
+      .toBeGreaterThanOrEqual(0);
+    await expect
+      .poll(
+        () =>
+          desktopTitlebarBandClearance("diff-panel-header-actions").targetTop -
+          desktopTitlebarBandClearance("diff-panel-header-actions").bandBottom,
+      )
+      .toBeGreaterThanOrEqual(0);
+    await expect
+      .poll(() => {
+        const metrics = desktopCaptionButtonLaneMetrics("diff-panel-header-actions");
+        return window.innerWidth - metrics.laneWidth - metrics.targetRight;
+      })
+      .toBeGreaterThanOrEqual(0);
+    await expect.poll(() => desktopInsetShellMetrics().paddingLeft).toBe("0px");
+    expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth + 1);
+
+    await mounted.cleanup();
+  });
+
+  it.each([
+    {
+      initialEntries: ["/settings"],
+      label: "settings",
+      topHeaderTestId: "settings-top-header",
+      expectedHeight: 40,
+    },
+    {
+      initialEntries: ["/orchestrate"],
+      label: "orchestrate",
+      topHeaderTestId: "orchestrate-top-header",
+      expectedHeight: 40,
+    },
+  ])(
+    "matches the desktop titlebar band main surface to the $label page shell surface",
+    async ({ initialEntries, topHeaderTestId, expectedHeight }) => {
+    const mounted = await mountSidebarApp({ initialEntries });
+
+    expect(computedBackgroundColorByTestId("desktop-titlebar-band-main-surface")).toBe(
+      sidebarInsetBackgroundColor(),
+    );
+    expect(computedBackgroundColorByTestId("desktop-titlebar-band-sidebar-surface")).toBe(
+      sidebarSurfaceBackgroundColor(),
+    );
+    await expect.poll(() => elementHeightByTestId(topHeaderTestId)).toBeGreaterThanOrEqual(expectedHeight);
+
+    await mounted.cleanup();
     },
   );
 
@@ -768,19 +1070,27 @@ describe("Sidebar browser", () => {
       titleTestId: "chat-header-title",
     },
   ])(
-    "keeps the desktop trigger clear of the $label header when the sidebar is collapsed",
+    "keeps the $label header below the desktop titlebar band when the sidebar is collapsed",
     async ({ initialEntries, titleTestId }) => {
       const mounted = await mountSidebarApp({ initialEntries });
 
       await collapseDesktopSidebar();
       await expect.poll(() => desktopInsetShellMetrics().paddingLeft).toBe("0px");
+      await expect.poll(() => desktopTitlebarBandMetrics().bandHeight).toBe(22);
       await expect.element(page.getByTestId("desktop-leading-slot")).toBeVisible();
+      if (titleTestId === "settings-header-label") {
+        await expect.poll(() => elementHeightByTestId("settings-top-header")).toBe(40);
+      } else if (titleTestId === "orchestrate-header-title") {
+        await expect.poll(() => elementHeightByTestId("orchestrate-top-header")).toBeGreaterThanOrEqual(40);
+      } else {
+        await expect.poll(() => elementHeightByTestId("chat-top-header")).toBe(40);
+      }
       await expect
         .poll(() => {
-          const metrics = desktopLeadingSlotClearance(titleTestId);
-          return metrics.targetLeft - metrics.slotRight;
+          const metrics = desktopTitlebarBandClearance(titleTestId);
+          return metrics.targetTop - metrics.bandBottom;
         })
-        .toBeGreaterThanOrEqual(4);
+        .toBeGreaterThanOrEqual(0);
 
       await mounted.cleanup();
     },
@@ -807,26 +1117,32 @@ describe("Sidebar browser", () => {
     await mounted.cleanup();
   });
 
-  it("keeps the desktop leading slot in plain browser mode without Electron APIs", async () => {
+  it("does not reserve an Electron titlebar band in plain browser mode without Electron APIs", async () => {
     Reflect.deleteProperty(window, "desktopBridge");
     const mounted = await mountSidebarApp([`/${THREAD_ID}`]);
 
-    await expect.element(page.getByTestId("desktop-leading-slot")).toBeVisible();
-    await expect.element(page.getByTestId("desktop-sidebar-brand-trigger")).toBeVisible();
     await expect.poll(() => desktopInsetShellMetrics().paddingLeft).toBe("0px");
-    await expect
-      .poll(
-        () =>
-          document.querySelector<HTMLElement>("[data-testid='desktop-leading-slot']")?.getBoundingClientRect()
-            .bottom ?? 0,
-      )
-      .toBe(52);
-    await expect
-      .poll(() => {
-        const metrics = desktopLeadingSlotClearance("chat-header-title");
-        return metrics.targetLeft - metrics.slotRight;
-      })
-      .toBeGreaterThanOrEqual(4);
+    expect(document.querySelector("[data-testid='desktop-titlebar-band']")).toBeNull();
+    expect(document.querySelector("[data-testid='desktop-leading-slot']")).toBeNull();
+
+    await mounted.cleanup();
+  });
+
+  it("shrinks the sidebar titlebar surface to the trigger slot width when the desktop sidebar is collapsed", async () => {
+    const mounted = await mountSidebarApp([`/${THREAD_ID}`]);
+
+    await expect.element(page.getByTestId("desktop-titlebar-band-sidebar-surface")).toBeVisible();
+    await expect.poll(() => elementHeightByTestId("sidebar-top-header")).toBe(40);
+    expect(computedBackgroundColorByTestId("desktop-titlebar-band-sidebar-surface")).toBe(
+      sidebarSurfaceBackgroundColor(),
+    );
+
+    await collapseDesktopSidebar();
+
+    expect(sidebarSurfaceWidth()).toBe(52);
+    expect(computedBackgroundColorByTestId("desktop-titlebar-band-sidebar-surface")).toBe(
+      sidebarSurfaceBackgroundColor(),
+    );
 
     await mounted.cleanup();
   });

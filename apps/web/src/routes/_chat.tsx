@@ -1,14 +1,14 @@
 import { ThreadId, type RuntimeMode } from "@t3tools/contracts";
 import { Outlet, createFileRoute, useNavigate, useRouterState } from "@tanstack/react-router";
-import { useEffect } from "react";
+import { type CSSProperties, useEffect } from "react";
 
+import DesktopShellTitlebarBand from "../components/DesktopShellTitlebarBand";
 import { DiffWorkerPoolProvider } from "../components/DiffWorkerPoolProvider";
 import IntegratedBrowserPane from "../components/IntegratedBrowserPane";
 import ThreadSidebar from "../components/Sidebar";
 import { useComposerDraftStore } from "../composerDraftStore";
-import { isElectron } from "../env";
 import { useStore } from "../store";
-import { Sidebar, SidebarDesktopBrandTrigger, SidebarProvider } from "~/components/ui/sidebar";
+import { Sidebar, SidebarProvider } from "~/components/ui/sidebar";
 
 function ChatRouteLayout() {
   const navigate = useNavigate();
@@ -31,6 +31,11 @@ function ChatRouteLayout() {
   const activeProjectId = activeThread?.projectId ?? activeDraftThread?.projectId ?? null;
   const activeRuntimeMode: RuntimeMode | null =
     activeThread?.runtimeMode ?? activeDraftThread?.runtimeMode ?? null;
+  const hasDesktopShellChrome =
+    typeof window !== "undefined" &&
+    (window.desktopBridge !== undefined || window.nativeApi !== undefined);
+  const desktopMainSurface =
+    routeThreadId !== null ? "var(--app-thread-surface)" : "var(--app-page-shell-surface)";
 
   useEffect(() => {
     const onMenuAction = window.desktopBridge?.onMenuAction;
@@ -49,7 +54,14 @@ function ChatRouteLayout() {
   }, [navigate]);
 
   return (
-    <SidebarProvider defaultOpen>
+    <SidebarProvider
+      defaultOpen
+      style={
+        {
+          "--app-desktop-main-surface": desktopMainSurface,
+        } as CSSProperties
+      }
+    >
       <Sidebar
         side="left"
         collapsible="offcanvas"
@@ -57,17 +69,11 @@ function ChatRouteLayout() {
       >
         <ThreadSidebar />
       </Sidebar>
+      <DesktopShellTitlebarBand hasDesktopShellChrome={hasDesktopShellChrome} />
       <div
-        className="fixed top-0 left-0 z-30 hidden h-[var(--desktop-leading-slot-width)] w-[var(--desktop-leading-slot-width)] items-center justify-center md:flex"
-        data-testid="desktop-leading-slot"
+        className="flex min-h-0 min-w-0 flex-1 overflow-hidden bg-[var(--app-desktop-main-surface)]"
+        style={{ paddingTop: "var(--desktop-native-titlebar-height, 0px)" }}
       >
-        <div
-          className={isElectron ? "drag-region flex h-full w-full items-center justify-center" : "flex h-full w-full items-center justify-center"}
-        >
-          <SidebarDesktopBrandTrigger className={isElectron ? "[-webkit-app-region:no-drag]" : undefined} />
-        </div>
-      </div>
-      <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden bg-[var(--app-workspace-canvas)]">
         <DiffWorkerPoolProvider>
           <Outlet />
         </DiffWorkerPoolProvider>

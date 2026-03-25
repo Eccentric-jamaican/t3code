@@ -185,6 +185,7 @@ function Sidebar({
   resizable = false,
   className,
   children,
+  style,
   ...props
 }: React.ComponentProps<"div"> & {
   side?: "left" | "right";
@@ -284,7 +285,7 @@ function Sidebar({
         />
         <div
           className={cn(
-            "fixed inset-y-0 z-10 hidden h-svh w-(--sidebar-width) transition-transform duration-150 ease-out will-change-transform group-data-[collapsible=offcanvas]:duration-0 motion-reduce:transition-none md:flex",
+            "fixed top-[var(--desktop-native-titlebar-height)] z-10 hidden h-[calc(100svh-var(--desktop-native-titlebar-height))] w-(--sidebar-width) transition-transform duration-150 ease-out will-change-transform group-data-[collapsible=offcanvas]:duration-0 motion-reduce:transition-none md:flex",
             side === "left"
               ? "left-0 group-data-[collapsible=offcanvas]:-translate-x-full"
               : "right-0 group-data-[collapsible=offcanvas]:translate-x-full",
@@ -295,6 +296,7 @@ function Sidebar({
             className,
           )}
           data-slot="sidebar-container"
+          style={style}
           {...props}
         >
           <div
@@ -350,6 +352,7 @@ function SidebarInsetTrigger(props: React.ComponentProps<typeof SidebarTrigger>)
 
 function SidebarDesktopBrandTrigger({
   className,
+  style,
   ...props
 }: Omit<React.ComponentProps<"button">, "onClick">) {
   const { isMobile, open, openMobile, toggleSidebar } = useSidebar();
@@ -363,13 +366,20 @@ function SidebarDesktopBrandTrigger({
     <button
       aria-label={isExpanded ? "Collapse Sidebar" : "Expand Sidebar"}
       className={cn(
-        "group/desktop-sidebar relative inline-flex h-[var(--desktop-leading-slot-width)] w-[var(--desktop-leading-slot-width)] items-center justify-center rounded-[14px] text-foreground transition-colors duration-150 hover:bg-accent/55 focus-visible:bg-accent/55 focus-visible:outline-none",
+        "group/desktop-sidebar relative inline-flex h-[var(--desktop-titlebar-trigger-size)] w-[var(--desktop-titlebar-trigger-size)] items-center justify-center rounded-[10px] text-foreground transition-colors duration-150 hover:bg-accent/55 focus-visible:bg-accent/55 focus-visible:outline-none",
         className,
       )}
       data-sidebar="desktop-brand-trigger"
       data-slot="sidebar-desktop-brand-trigger"
       data-testid="desktop-sidebar-brand-trigger"
       onClick={() => toggleSidebar()}
+      style={
+        {
+          "--desktop-titlebar-trigger-size":
+            "clamp(14px, calc(var(--desktop-native-titlebar-height) - 2px), 24px)",
+          ...style,
+        } as React.CSSProperties
+      }
       title={isExpanded ? "Collapse Sidebar" : "Expand Sidebar"}
       type="button"
       {...props}
@@ -401,7 +411,7 @@ function SidebarBrandMark() {
       src={resolvedTheme === "dark" ? SIDEBAR_BRAND_MARK_DARK_SRC : SIDEBAR_BRAND_MARK_LIGHT_SRC}
       alt=""
       aria-hidden="true"
-      className="h-6 w-6 select-none object-contain"
+      className="h-3.5 w-3.5 select-none object-contain"
       draggable={false}
     />
   );
@@ -717,7 +727,7 @@ function SidebarInset({ className, ...props }: React.ComponentProps<"main">) {
   return (
     <main
       className={cn(
-        "relative flex w-full flex-1 flex-col bg-background",
+        "relative flex min-w-0 flex-1 flex-col bg-background",
         "md:peer-data-[variant=inset]:peer-data-[state=collapsed]:ms-2 md:peer-data-[variant=inset]:m-2 md:peer-data-[variant=inset]:ms-0 md:peer-data-[variant=inset]:rounded-xl md:peer-data-[variant=inset]:shadow-sm/5",
         className,
       )}

@@ -323,135 +323,148 @@ export default function IntegratedBrowserPane(props: BrowserPaneProps) {
   return (
     <aside
       ref={paneRef}
-      className="relative flex h-full shrink-0 border-l border-border bg-background"
-      style={{ width }}
+      className="relative flex h-full min-w-[320px] shrink-0 border-l border-border bg-background"
+      style={{
+        width,
+        right: "var(--app-desktop-top-edge-action-keepout-width)",
+      }}
     >
       <div
         className="absolute inset-y-0 left-0 z-20 w-1 cursor-col-resize"
         onPointerDown={onResizeStart}
       />
       <div className="flex min-w-0 flex-1 flex-col">
-        <div className="flex items-center gap-1 border-b border-border px-2 py-2">
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-xs"
-            aria-label="Back"
-            disabled={controlsDisabled || !session?.navigation.canGoBack}
-            onClick={() => {
-              if (!activeProjectId) {
-                return;
-              }
-              void runBrowserAction("go back", () =>
-                api.browser.back({ projectId: activeProjectId }),
-              ).then((nextSnapshot) => {
-                if (nextSnapshot) {
-                  setSnapshot(nextSnapshot);
+        <div
+          className="desktop-top-edge-actions-safe flex h-[var(--app-desktop-content-header-height)] min-w-0 shrink-0 items-center gap-2 border-b border-border px-2"
+          data-testid="integrated-browser-top-header"
+        >
+          <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              aria-label="Back"
+              disabled={controlsDisabled || !session?.navigation.canGoBack}
+              onClick={() => {
+                if (!activeProjectId) {
+                  return;
                 }
-              });
-            }}
-          >
-            <ArrowLeftIcon />
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-xs"
-            aria-label="Forward"
-            disabled={controlsDisabled || !session?.navigation.canGoForward}
-            onClick={() => {
-              if (!activeProjectId) {
-                return;
-              }
-              void runBrowserAction("go forward", () =>
-                api.browser.forward({ projectId: activeProjectId }),
-              ).then((nextSnapshot) => {
-                if (nextSnapshot) {
-                  setSnapshot(nextSnapshot);
+                void runBrowserAction("go back", () =>
+                  api.browser.back({ projectId: activeProjectId }),
+                ).then((nextSnapshot) => {
+                  if (nextSnapshot) {
+                    setSnapshot(nextSnapshot);
+                  }
+                });
+              }}
+            >
+              <ArrowLeftIcon />
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              aria-label="Forward"
+              disabled={controlsDisabled || !session?.navigation.canGoForward}
+              onClick={() => {
+                if (!activeProjectId) {
+                  return;
                 }
-              });
-            }}
-          >
-            <ArrowRightIcon />
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-xs"
-            aria-label="Reload"
-            disabled={controlsDisabled}
-            onClick={() => {
-              if (!activeProjectId) {
-                return;
-              }
-              void runBrowserAction("reload page", () =>
-                api.browser.reload({ projectId: activeProjectId }),
-              ).then((nextSnapshot) => {
-                if (nextSnapshot) {
-                  setSnapshot(nextSnapshot);
+                void runBrowserAction("go forward", () =>
+                  api.browser.forward({ projectId: activeProjectId }),
+                ).then((nextSnapshot) => {
+                  if (nextSnapshot) {
+                    setSnapshot(nextSnapshot);
+                  }
+                });
+              }}
+            >
+              <ArrowRightIcon />
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              aria-label="Reload"
+              disabled={controlsDisabled}
+              onClick={() => {
+                if (!activeProjectId) {
+                  return;
                 }
-              });
-            }}
+                void runBrowserAction("reload page", () =>
+                  api.browser.reload({ projectId: activeProjectId }),
+                ).then((nextSnapshot) => {
+                  if (nextSnapshot) {
+                    setSnapshot(nextSnapshot);
+                  }
+                });
+              }}
+            >
+              <RefreshCwIcon className={cn(session?.navigation.isLoading && "animate-spin")} />
+            </Button>
+            <Input
+              value={urlInput}
+              onChange={(event) => setUrlInput(event.target.value)}
+              onKeyDown={onUrlKeyDown}
+              className="h-8 min-w-0 flex-1 rounded-md border-border bg-muted/40 text-xs"
+              spellCheck={false}
+              aria-label="Browser URL"
+            />
+          </div>
+          <div
+            className="desktop-top-edge-actions-safe flex shrink-0 items-center gap-1"
+            data-testid="integrated-browser-header-actions"
           >
-            <RefreshCwIcon className={cn(session?.navigation.isLoading && "animate-spin")} />
-          </Button>
-          <Input
-            value={urlInput}
-            onChange={(event) => setUrlInput(event.target.value)}
-            onKeyDown={onUrlKeyDown}
-            className="h-8 min-w-0 flex-1 rounded-md border-border bg-muted/40 text-xs"
-            spellCheck={false}
-            aria-label="Browser URL"
-          />
-          <Toggle
-            pressed={session?.inspectMode === true}
-            onPressedChange={(next) => {
-              if (!activeProjectId) {
-                return;
-              }
-              void runBrowserAction("toggle inspect mode", () =>
-                api.browser.setInspectMode({ projectId: activeProjectId, enabled: next }),
-              ).then((nextSnapshot) => {
-                if (nextSnapshot) {
-                  setSnapshot(nextSnapshot);
+            <Toggle
+              pressed={session?.inspectMode === true}
+              onPressedChange={(next) => {
+                if (!activeProjectId) {
+                  return;
                 }
-              });
-            }}
-            variant="outline"
-            size="sm"
-            aria-label="Inspect element"
-            disabled={controlsDisabled}
-          >
-            <SearchIcon className="size-3.5" />
-          </Toggle>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-xs"
-            aria-label="Kill browser"
-            disabled={controlsDisabled}
-            onClick={() => {
-              if (!activeProjectId) {
-                return;
-              }
-              void runBrowserAction("kill browser", () =>
-                api.browser.kill({ projectId: activeProjectId }),
-              ).then(() => {
-                setSnapshot(null);
-              });
-            }}
-          >
-            <GlobeIcon />
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-xs"
-            aria-label="Collapse browser"
-            onClick={() => setOpen(false)}
-          >
-            <XIcon />
-          </Button>
+                void runBrowserAction("toggle inspect mode", () =>
+                  api.browser.setInspectMode({ projectId: activeProjectId, enabled: next }),
+                ).then((nextSnapshot) => {
+                  if (nextSnapshot) {
+                    setSnapshot(nextSnapshot);
+                  }
+                });
+              }}
+              variant="outline"
+              size="sm"
+              aria-label="Inspect element"
+              disabled={controlsDisabled}
+            >
+              <SearchIcon className="size-3.5" />
+            </Toggle>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              aria-label="Kill browser"
+              disabled={controlsDisabled}
+              onClick={() => {
+                if (!activeProjectId) {
+                  return;
+                }
+                void runBrowserAction("kill browser", () =>
+                  api.browser.kill({ projectId: activeProjectId }),
+                ).then(() => {
+                  setSnapshot(null);
+                });
+              }}
+            >
+              <GlobeIcon />
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              aria-label="Collapse browser"
+              onClick={() => setOpen(false)}
+            >
+              <XIcon />
+            </Button>
+          </div>
         </div>
         <div className="relative min-h-0 flex-1">
           <div ref={viewportRef} className="absolute inset-0" />

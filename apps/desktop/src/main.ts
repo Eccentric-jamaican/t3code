@@ -47,6 +47,7 @@ import {
 } from "./updateMachine";
 import { importLegacyDesktopStateIfNeeded } from "./legacyStateImport";
 import { resolveDesktopStateDir } from "./statePaths";
+import { getDesktopWindowChromeMetrics } from "./windowChromeMetrics";
 
 fixPath();
 
@@ -1425,13 +1426,14 @@ function getIconOption(): { icon: Electron.NativeImage } | Record<string, never>
 }
 
 function createWindow(): BrowserWindow {
+  const windowChromeMetrics = getDesktopWindowChromeMetrics(process.platform);
   const titleBarOverlay =
     process.platform === "darwin"
       ? false
       : {
           color: "#00000000",
           symbolColor: "#6b7280",
-          height: 52,
+          height: windowChromeMetrics.titlebarHeightPx,
         };
   const window = new BrowserWindow({
     width: 1100,

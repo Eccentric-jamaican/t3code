@@ -28,9 +28,7 @@ import { useMediaQuery } from "~/hooks/useMediaQuery";
 import { cn, newCommandId, newTaskId } from "~/lib/utils";
 import { useStore } from "~/store";
 import type { ProjectRules, TaskRuntimeStatus, TaskState } from "~/types";
-import AppPageShell, {
-  useAppPageDesktopLeadingSlotSafeHeaderStyle,
-} from "~/components/AppPageShell";
+import AppPageShell from "~/components/AppPageShell";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import {
@@ -472,7 +470,6 @@ export default function OrchestrateRouteView({
   taskIdFromSearch,
   viewFromSearch,
 }: RouteSearchProps) {
-  const desktopLeadingSlotSafeHeaderStyle = useAppPageDesktopLeadingSlotSafeHeaderStyle();
   const navigate = useNavigate();
   const projects = useStore((store) => store.projects);
   const tasks = useStore((store) => store.tasks);
@@ -987,12 +984,12 @@ export default function OrchestrateRouteView({
 
   return (
     <AppPageShell className="min-w-0">
-      <div className="flex min-h-0 flex-1 flex-col bg-[var(--app-page-shell-surface)]">
-        <header
-          className={cn("px-3 py-2.5 sm:px-5")}
-          style={desktopLeadingSlotSafeHeaderStyle}
-        >
-          <div className="flex min-w-0 flex-wrap items-center gap-2 sm:gap-3">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[var(--app-page-shell-surface)]">
+        <header className="shrink-0 px-3 py-2.5 sm:px-5 md:min-h-[var(--app-desktop-content-header-height)] md:py-1.5">
+          <div
+            className="flex w-full min-w-0 flex-wrap items-center gap-2 sm:gap-3"
+            data-testid="orchestrate-top-header"
+          >
             <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
               <SidebarInsetTrigger className="shrink-0 md:hidden" />
               <h1
@@ -1035,8 +1032,12 @@ export default function OrchestrateRouteView({
               </Menu>
             </div>
 
-            <div className="flex min-w-0 items-center gap-1.5 sm:gap-2">
-              <div className="flex items-center rounded-full border border-border bg-background p-0.5 shadow-xs/5">
+            <div className="flex basis-full flex-wrap items-center gap-1.5 sm:gap-2">
+              <div
+                className="desktop-top-edge-actions-safe flex flex-wrap items-center gap-1.5 sm:gap-2"
+                data-testid="orchestrate-header-actions"
+              >
+                <div className="flex items-center rounded-full border border-border bg-background p-0.5 shadow-xs/5">
                 <Toggle
                   pressed={resolvedView === "board"}
                   onPressedChange={(pressed) => {
@@ -1076,18 +1077,18 @@ export default function OrchestrateRouteView({
                   <InboxIcon className="size-3.5" />
                   <span className="hidden sm:inline">Inbox</span>
                 </Toggle>
-              </div>
+                </div>
 
-              <Menu>
-                <MenuTrigger
-                  render={
-                    <Button variant="ghost" size="xs" className="rounded-full px-2.5">
-                      <FilterIcon className="size-3.5" />
-                      <span className="hidden sm:inline">Filter</span>
-                    </Button>
-                  }
-                />
-                <MenuPopup align="end" className="w-64">
+                <Menu>
+                  <MenuTrigger
+                    render={
+                      <Button variant="ghost" size="xs" className="rounded-full px-2.5">
+                        <FilterIcon className="size-3.5" />
+                        <span className="hidden sm:inline">Filter</span>
+                      </Button>
+                    }
+                  />
+                  <MenuPopup align="end" className="w-64">
                   <div className="p-2">
                     <div className="relative">
                       <SearchIcon className="-translate-y-1/2 pointer-events-none absolute top-1/2 left-2 size-3.5 text-muted-foreground/70" />
@@ -1184,19 +1185,19 @@ export default function OrchestrateRouteView({
                       </MenuCheckboxItem>
                     </>
                   )}
-                </MenuPopup>
-              </Menu>
+                  </MenuPopup>
+                </Menu>
 
-              <Menu>
-                <MenuTrigger
-                  render={
-                    <Button variant="ghost" size="xs" className="rounded-full px-2.5">
-                      <Settings2Icon className="size-3.5" />
-                      <span className="hidden sm:inline">Display</span>
-                    </Button>
-                  }
-                />
-                <MenuPopup align="end" className="w-48">
+                <Menu>
+                  <MenuTrigger
+                    render={
+                      <Button variant="ghost" size="xs" className="rounded-full px-2.5">
+                        <Settings2Icon className="size-3.5" />
+                        <span className="hidden sm:inline">Display</span>
+                      </Button>
+                    }
+                  />
+                  <MenuPopup align="end" className="w-48">
                   <MenuItem onClick={() => setProjectRulesOpen(true)}>Project rules</MenuItem>
                   {resolvedView !== "inbox" ? (
                     <>
@@ -1219,18 +1220,19 @@ export default function OrchestrateRouteView({
                       </MenuCheckboxItem>
                     </>
                   ) : null}
-                </MenuPopup>
-              </Menu>
+                  </MenuPopup>
+                </Menu>
 
-              <Button
-                onClick={() => openNewTaskDialog()}
-                size="xs"
-                className="rounded-full px-3"
-                disabled={!selectedProjectId || resolvedView === "inbox"}
-              >
-                <PlusIcon className="size-3.5" />
-                <span className="hidden sm:inline">New task</span>
-              </Button>
+                <Button
+                  onClick={() => openNewTaskDialog()}
+                  size="xs"
+                  className="rounded-full px-3"
+                  disabled={!selectedProjectId || resolvedView === "inbox"}
+                >
+                  <PlusIcon className="size-3.5" />
+                  <span className="hidden sm:inline">New task</span>
+                </Button>
+              </div>
             </div>
           </div>
         </header>
@@ -1238,8 +1240,8 @@ export default function OrchestrateRouteView({
         {emptyState ? (
           emptyState
         ) : (
-          <div className="flex min-h-0 flex-1">
-            <ScrollArea className="min-h-0 flex-1" scrollbarGutter>
+          <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+            <ScrollArea className="min-h-0 min-w-0 flex-1" scrollbarGutter>
               {resolvedView === "board" ? (
                 <div className="grid min-h-full auto-cols-[minmax(18rem,22rem)] grid-flow-col gap-3 px-3 py-3 sm:px-4 sm:py-4">
                   {visibleStates.map((state) => {

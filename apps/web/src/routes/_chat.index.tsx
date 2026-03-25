@@ -1,14 +1,11 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import AppPageShell, {
-  useAppPageDesktopLeadingSlotSafeHeaderStyle,
-} from "../components/AppPageShell";
-import { cn } from "~/lib/utils";
-import { isElectron } from "../env";
+import AppPageShell from "../components/AppPageShell";
+import { isElectron, isElectronRuntime } from "../env";
 import { SidebarInsetTrigger } from "../components/ui/sidebar";
 
 function ChatIndexRouteView() {
-  const desktopLeadingSlotSafeHeaderStyle = useAppPageDesktopLeadingSlotSafeHeaderStyle();
+  const usesDesktopAppChrome = isElectronRuntime();
 
   return (
     <AppPageShell className="text-muted-foreground/40">
@@ -22,10 +19,10 @@ function ChatIndexRouteView() {
           </header>
         )}
 
-        {isElectron && (
+        {usesDesktopAppChrome && (
           <div
-            className={cn("drag-region flex h-[52px] shrink-0 items-center gap-2 px-3 sm:px-5")}
-            style={desktopLeadingSlotSafeHeaderStyle}
+            className="flex h-[var(--app-desktop-content-header-height)] shrink-0 items-center px-3 sm:px-5"
+            data-testid="chat-index-top-row"
           >
             <span className="text-xs text-muted-foreground/50">No active thread</span>
           </div>

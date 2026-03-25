@@ -8,6 +8,7 @@ import "./index.css";
 import ACODE_ICON from "../../../assets/prod/ACODE.png";
 import ACODE_DARK_ICON from "../../../assets/prod/ACODE-DARK.png";
 
+import { applyDesktopWindowChromeMetrics } from "./desktopWindowChrome";
 import { isElectron } from "./env";
 import { getRouter } from "./router";
 import { APP_DISPLAY_NAME } from "./branding";
@@ -17,6 +18,7 @@ const history = isElectron ? createHashHistory() : createBrowserHistory();
 const router = getRouter(history);
 
 document.title = APP_DISPLAY_NAME;
+applyDesktopWindowChromeMetrics(document.documentElement);
 
 function syncDocumentIcons() {
   const iconHref = document.documentElement.classList.contains("dark") ? ACODE_DARK_ICON : ACODE_ICON;

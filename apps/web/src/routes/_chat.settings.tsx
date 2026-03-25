@@ -11,10 +11,8 @@ import {
   shouldShowFastTierIcon,
   useAppSettings,
 } from "../appSettings";
-import AppPageShell, {
-  useAppPageDesktopLeadingSlotSafeHeaderStyle,
-} from "../components/AppPageShell";
-import { isElectron } from "../env";
+import AppPageShell from "../components/AppPageShell";
+import { isElectronRuntime } from "../env";
 import { useTheme } from "../hooks/useTheme";
 import { cn } from "../lib/utils";
 import { serverConfigQueryOptions } from "../lib/serverReactQuery";
@@ -91,9 +89,9 @@ function patchCustomModels(provider: ProviderKind, models: string[]) {
 }
 
 function SettingsRouteView() {
+  const usesDesktopAppChrome = isElectronRuntime();
   const { theme, setTheme, resolvedTheme } = useTheme();
   const { settings, defaults, updateSettings } = useAppSettings();
-  const desktopLeadingSlotSafeHeaderStyle = useAppPageDesktopLeadingSlotSafeHeaderStyle();
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const [isOpeningKeybindings, setIsOpeningKeybindings] = useState(false);
   const [openKeybindingsError, setOpenKeybindingsError] = useState<string | null>(null);
@@ -189,10 +187,10 @@ function SettingsRouteView() {
       <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--app-page-shell-surface)] text-foreground">
         <header
           className={cn(
-            "px-3 sm:px-5",
-            isElectron ? "drag-region flex h-[52px] items-center" : "py-2 sm:py-3",
+            "flex items-center px-3 sm:px-5",
+            usesDesktopAppChrome ? "h-[var(--app-desktop-content-header-height)]" : "py-2 sm:py-3",
           )}
-          style={desktopLeadingSlotSafeHeaderStyle}
+          data-testid="settings-top-header"
         >
           <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden sm:gap-3">
             <SidebarInsetTrigger className="shrink-0 md:hidden" />
