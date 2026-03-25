@@ -1,6 +1,7 @@
 import "../index.css";
 
 import {
+  type BrowserPaneBounds,
   type BrowserSessionSnapshot,
   ORCHESTRATION_WS_CHANNELS,
   ORCHESTRATION_WS_METHODS,
@@ -550,16 +551,21 @@ function scrollViewportRightGapByTestId(testId: string): number {
   return Math.round(viewport!.getBoundingClientRect().right - element!.getBoundingClientRect().right);
 }
 
-function createDesktopBrowserSnapshot(projectId: ProjectId): BrowserSessionSnapshot {
+const DEFAULT_DESKTOP_BROWSER_PANE_BOUNDS: BrowserPaneBounds = {
+  x: 1_020,
+  y: 22,
+  width: 480,
+  height: 760,
+};
+
+function createDesktopBrowserSnapshot(
+  projectId: ProjectId,
+  paneBounds: BrowserPaneBounds = DEFAULT_DESKTOP_BROWSER_PANE_BOUNDS,
+): BrowserSessionSnapshot {
   return {
     paneOpen: true,
     paneProjectId: projectId,
-    paneBounds: {
-      x: 1_020,
-      y: 22,
-      width: 480,
-      height: 760,
-    },
+    paneBounds,
     session: {
       sessionId: "browser-session-sidebar-test",
       projectId,
@@ -580,28 +586,34 @@ function createDesktopBrowserSnapshot(projectId: ProjectId): BrowserSessionSnaps
 }
 
 function createDesktopBrowserBridge(projectId: ProjectId): DesktopBridge["browser"] {
+  let paneBounds = { ...DEFAULT_DESKTOP_BROWSER_PANE_BOUNDS };
+  const buildSnapshot = () => createDesktopBrowserSnapshot(projectId, paneBounds);
+
   return {
-    getState: async () => createDesktopBrowserSnapshot(projectId),
-    open: async () => createDesktopBrowserSnapshot(projectId),
+    getState: async () => buildSnapshot(),
+    open: async (input) => {
+      paneBounds = { ...input.bounds };
+      return buildSnapshot();
+    },
     closePane: async () => undefined,
     navigate: async (input) => ({
-      ...createDesktopBrowserSnapshot(projectId),
+      ...buildSnapshot(),
       session: {
-        ...createDesktopBrowserSnapshot(projectId).session!,
+        ...buildSnapshot().session!,
         navigation: {
-          ...createDesktopBrowserSnapshot(projectId).session!.navigation,
+          ...buildSnapshot().session!.navigation,
           url: input.url,
         },
       },
     }),
-    back: async () => createDesktopBrowserSnapshot(projectId),
-    forward: async () => createDesktopBrowserSnapshot(projectId),
-    reload: async () => createDesktopBrowserSnapshot(projectId),
+    back: async () => buildSnapshot(),
+    forward: async () => buildSnapshot(),
+    reload: async () => buildSnapshot(),
     kill: async () => undefined,
     setInspectMode: async (input) => ({
-      ...createDesktopBrowserSnapshot(projectId),
+      ...buildSnapshot(),
       session: {
-        ...createDesktopBrowserSnapshot(projectId).session!,
+        ...buildSnapshot().session!,
         inspectMode: input.enabled,
       },
     }),
@@ -1030,6 +1042,12 @@ describe("Sidebar browser", () => {
         return window.innerWidth - metrics.laneWidth - metrics.targetRight;
       })
       .toBeGreaterThanOrEqual(0);
+    await expect
+      .poll(() => {
+        const metrics = desktopCaptionButtonLaneMetrics("integrated-browser-header-actions");
+        return window.innerWidth - metrics.targetRight;
+      })
+      .toBeLessThanOrEqual(16);
     await expect
       .poll(
         () =>

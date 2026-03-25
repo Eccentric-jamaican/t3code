@@ -1,4 +1,5 @@
 import type {
+  BrowserPaneBounds,
   BrowserInspectCapture,
   BrowserSessionSnapshot,
   ProjectId,
@@ -32,6 +33,17 @@ import { Toggle } from "~/components/ui/toggle";
 import { useComposerDraftStore } from "~/composerDraftStore";
 import { readNativeApi } from "~/nativeApi";
 import { cn } from "~/lib/utils";
+
+const BOUNDS_SETTLE_DELAYS_MS = [0, 50, 150, 300] as const;
+
+function arePaneBoundsEqual(left: BrowserPaneBounds | null, right: BrowserPaneBounds | null): boolean {
+  return (
+    left?.x === right?.x &&
+    left?.y === right?.y &&
+    left?.width === right?.width &&
+    left?.height === right?.height
+  );
+}
 
 function dataUrlToFile(dataUrl: string, name: string): File {
   const match = /^data:([^;]+);base64,(.+)$/i.exec(dataUrl);
@@ -114,6 +126,9 @@ export default function IntegratedBrowserPane(props: BrowserPaneProps) {
   const [urlInput, setUrlInput] = useState("");
   const [isSyncingBounds, setIsSyncingBounds] = useState(false);
   const captureInFlightRef = useRef(false);
+  const lastSyncedBoundsRef = useRef<BrowserPaneBounds | null>(null);
+  const pendingBoundsRef = useRef<BrowserPaneBounds | null>(null);
+  const syncInFlightRef = useRef(false);
   const api = readNativeApi();
   const isDesktopBrowserAvailable =
     api && typeof window !== "undefined" && Boolean(window.desktopBridge?.browser);
@@ -216,6 +231,14 @@ export default function IntegratedBrowserPane(props: BrowserPaneProps) {
     setUrlInput(nextUrl);
   }, [session?.navigation.url]);
 
+  useEffect(() => {
+    if (!open || !activeProjectId) {
+      lastSyncedBoundsRef.current = null;
+      pendingBoundsRef.current = null;
+      syncInFlightRef.current = false;
+    }
+  }, [activeProjectId, open]);
+
   useEffect(
     () => () => {
       if (!api?.browser) {
@@ -235,52 +258,98 @@ export default function IntegratedBrowserPane(props: BrowserPaneProps) {
     }
 
     let cancelled = false;
-    const syncBounds = async () => {
+    const readBounds = (): BrowserPaneBounds | null => {
       if (!viewportRef.current) {
-        return;
+        return null;
       }
       const rect = viewportRef.current.getBoundingClientRect();
       if (rect.width <= 0 || rect.height <= 0) {
+        return null;
+      }
+      return {
+        x: Math.round(rect.left),
+        y: Math.round(rect.top),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+      };
+    };
+
+    const flushBounds = async (): Promise<void> => {
+      if (syncInFlightRef.current) {
         return;
       }
+      const nextBounds = pendingBoundsRef.current;
+      if (!nextBounds || arePaneBoundsEqual(lastSyncedBoundsRef.current, nextBounds)) {
+        pendingBoundsRef.current = null;
+        return;
+      }
+
+      syncInFlightRef.current = true;
       setIsSyncingBounds(true);
       try {
         const nextSnapshot = await runBrowserAction("open browser pane", () =>
           api.browser.open({
             projectId: activeProjectId,
-            bounds: {
-              x: rect.left,
-              y: rect.top,
-              width: rect.width,
-              height: rect.height,
-            },
+            bounds: nextBounds,
           }),
         );
-        if (!cancelled) {
-          setSnapshot(nextSnapshot ?? null);
+        if (nextSnapshot !== undefined) {
+          lastSyncedBoundsRef.current = nextBounds;
+          if (arePaneBoundsEqual(pendingBoundsRef.current, nextBounds)) {
+            pendingBoundsRef.current = null;
+          }
+          if (!cancelled) {
+            setSnapshot(nextSnapshot);
+          }
+        } else if (arePaneBoundsEqual(pendingBoundsRef.current, nextBounds)) {
+          pendingBoundsRef.current = null;
         }
       } finally {
+        syncInFlightRef.current = false;
         if (!cancelled) {
           setIsSyncingBounds(false);
+        }
+        if (
+          pendingBoundsRef.current &&
+          !arePaneBoundsEqual(lastSyncedBoundsRef.current, pendingBoundsRef.current)
+        ) {
+          void flushBounds();
         }
       }
     };
 
+    const requestBoundsSync = () => {
+      const nextBounds = readBounds();
+      if (!nextBounds) {
+        return;
+      }
+      pendingBoundsRef.current = nextBounds;
+      void flushBounds();
+    };
+
     const observer = new ResizeObserver(() => {
-      void syncBounds();
+      requestBoundsSync();
     });
     observer.observe(viewportRef.current);
     const frameId = window.requestAnimationFrame(() => {
-      void syncBounds();
+      requestBoundsSync();
     });
-    window.addEventListener("resize", syncBounds);
-    window.addEventListener("scroll", syncBounds, true);
+    const settleTimeoutIds = BOUNDS_SETTLE_DELAYS_MS.map((delayMs) =>
+      window.setTimeout(() => {
+        requestBoundsSync();
+      }, delayMs),
+    );
+    window.addEventListener("resize", requestBoundsSync);
+    window.addEventListener("scroll", requestBoundsSync, true);
     return () => {
       cancelled = true;
       window.cancelAnimationFrame(frameId);
+      for (const timeoutId of settleTimeoutIds) {
+        window.clearTimeout(timeoutId);
+      }
       observer.disconnect();
-      window.removeEventListener("resize", syncBounds);
-      window.removeEventListener("scroll", syncBounds, true);
+      window.removeEventListener("resize", requestBoundsSync);
+      window.removeEventListener("scroll", requestBoundsSync, true);
     };
   }, [activeProjectId, api, open, runBrowserAction, width]);
 
@@ -350,7 +419,7 @@ export default function IntegratedBrowserPane(props: BrowserPaneProps) {
       />
       <div className="flex min-w-0 flex-1 flex-col">
         <div
-          className="desktop-top-edge-actions-safe flex h-[var(--app-desktop-content-header-height)] min-w-0 shrink-0 items-center gap-2 border-b border-border px-2"
+          className="flex h-[var(--app-desktop-content-header-height)] min-w-0 shrink-0 items-center gap-2 border-b border-border px-2"
           data-testid="integrated-browser-top-header"
         >
           <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
@@ -426,10 +495,7 @@ export default function IntegratedBrowserPane(props: BrowserPaneProps) {
               aria-label="Browser URL"
             />
           </div>
-          <div
-            className="desktop-top-edge-actions-safe flex shrink-0 items-center gap-1"
-            data-testid="integrated-browser-header-actions"
-          >
+          <div className="flex shrink-0 items-center gap-1" data-testid="integrated-browser-header-actions">
             <Toggle
               pressed={session?.inspectMode === true}
               onPressedChange={(next) => {
@@ -482,7 +548,11 @@ export default function IntegratedBrowserPane(props: BrowserPaneProps) {
           </div>
         </div>
         <div className="relative min-h-0 flex-1">
-          <div ref={viewportRef} className="absolute inset-0" />
+          <div
+            ref={viewportRef}
+            className="absolute inset-0"
+            data-integrated-browser-native-viewport="true"
+          />
           {(isSyncingBounds || !session) && (
             <div className="absolute inset-0 flex items-center justify-center bg-background/80 text-xs text-muted-foreground">
               Loading browser...

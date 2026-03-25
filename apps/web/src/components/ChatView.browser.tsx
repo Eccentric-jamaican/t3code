@@ -2,6 +2,7 @@
 import "../index.css";
 
 import {
+  type BrowserPaneBounds,
   type BrowserSessionSnapshot,
   EventId,
   type DesktopBridge,
@@ -800,16 +801,21 @@ function elementWidthBySelector(selector: string): number {
   return Math.round(element!.getBoundingClientRect().width);
 }
 
-function createDesktopBrowserSnapshot(projectId: ProjectId): BrowserSessionSnapshot {
+const DEFAULT_DESKTOP_BROWSER_PANE_BOUNDS: BrowserPaneBounds = {
+  x: 980,
+  y: 22,
+  width: 480,
+  height: 860,
+};
+
+function createDesktopBrowserSnapshot(
+  projectId: ProjectId,
+  paneBounds: BrowserPaneBounds = DEFAULT_DESKTOP_BROWSER_PANE_BOUNDS,
+): BrowserSessionSnapshot {
   return {
     paneOpen: true,
     paneProjectId: projectId,
-    paneBounds: {
-      x: 980,
-      y: 22,
-      width: 480,
-      height: 860,
-    },
+    paneBounds,
     session: {
       sessionId: "browser-session-chat-test",
       projectId,
@@ -833,28 +839,34 @@ function createDesktopBrowserBridge(
   projectId: ProjectId,
   overrides: Partial<DesktopBridge["browser"]> = {},
 ): DesktopBridge["browser"] {
+  let paneBounds = { ...DEFAULT_DESKTOP_BROWSER_PANE_BOUNDS };
+  const buildSnapshot = () => createDesktopBrowserSnapshot(projectId, paneBounds);
+
   return {
-    getState: async () => createDesktopBrowserSnapshot(projectId),
-    open: async () => createDesktopBrowserSnapshot(projectId),
+    getState: async () => buildSnapshot(),
+    open: async (input) => {
+      paneBounds = { ...input.bounds };
+      return buildSnapshot();
+    },
     closePane: async () => undefined,
     navigate: async (input) => ({
-      ...createDesktopBrowserSnapshot(projectId),
+      ...buildSnapshot(),
       session: {
-        ...createDesktopBrowserSnapshot(projectId).session!,
+        ...buildSnapshot().session!,
         navigation: {
-          ...createDesktopBrowserSnapshot(projectId).session!.navigation,
+          ...buildSnapshot().session!.navigation,
           url: input.url,
         },
       },
     }),
-    back: async () => createDesktopBrowserSnapshot(projectId),
-    forward: async () => createDesktopBrowserSnapshot(projectId),
-    reload: async () => createDesktopBrowserSnapshot(projectId),
+    back: async () => buildSnapshot(),
+    forward: async () => buildSnapshot(),
+    reload: async () => buildSnapshot(),
     kill: async () => undefined,
     setInspectMode: async (input) => ({
-      ...createDesktopBrowserSnapshot(projectId),
+      ...buildSnapshot(),
       session: {
-        ...createDesktopBrowserSnapshot(projectId).session!,
+        ...buildSnapshot().session!,
         inspectMode: input.enabled,
       },
     }),
@@ -1392,11 +1404,82 @@ describe("ChatView timeline estimator parity (full app)", () => {
       await expect.poll(() => elementHeightByTestId("integrated-browser-top-header")).toBe(40);
       await expect.poll(() => elementWidthBySelector("input[aria-label='Browser URL']")).toBeGreaterThanOrEqual(150);
       await expect.poll(() => {
+        const metrics = desktopCaptionButtonLaneMetrics("integrated-browser-header-actions");
+        return window.innerWidth - metrics.targetRight;
+      }).toBeLessThanOrEqual(16);
+      await expect.poll(() => {
         const header = document.querySelector<HTMLElement>(
           "[data-testid='integrated-browser-top-header']",
         );
         expect(header).not.toBeNull();
         return header!.scrollWidth - header!.clientWidth;
+      }).toBeLessThanOrEqual(1);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("resends the latest browser pane bounds after the pane widens during an in-flight open", async () => {
+    let resolveFirstOpen: () => void = () => undefined;
+    const firstOpenGate = new Promise<void>((resolve) => {
+      resolveFirstOpen = () => resolve();
+    });
+    let paneBounds = { ...DEFAULT_DESKTOP_BROWSER_PANE_BOUNDS };
+    const openCalls: BrowserPaneBounds[] = [];
+    let openCallCount = 0;
+
+    window.desktopBridge = {
+      ...window.desktopBridge,
+      browser: createDesktopBrowserBridge(PROJECT_ID, {
+        open: async (input) => {
+          openCallCount += 1;
+          openCalls.push({ ...input.bounds });
+          if (openCallCount === 1) {
+            await firstOpenGate;
+          }
+          paneBounds = { ...input.bounds };
+          return createDesktopBrowserSnapshot(PROJECT_ID, paneBounds);
+        },
+      }),
+    } as DesktopBridge;
+    useBrowserPaneStore.setState({
+      open: true,
+      width: 480,
+    });
+
+    const mounted = await mountChatView({
+      viewport: {
+        ...DEFAULT_VIEWPORT,
+        name: "desktop-browser-open-race",
+        width: 1440,
+        height: 960,
+      },
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-browser-open-race" as MessageId,
+        targetText: "browser open race",
+      }),
+    });
+
+    try {
+      await expect.poll(() => openCalls.length).toBeGreaterThanOrEqual(1);
+
+      useBrowserPaneStore.setState({
+        open: true,
+        width: 620,
+      });
+      await waitForLayout();
+
+      const pane = document.querySelector<HTMLElement>("[data-testid='integrated-browser-pane']");
+      expect(pane).not.toBeNull();
+
+      resolveFirstOpen();
+
+      await expect.poll(() => openCalls.length).toBeGreaterThanOrEqual(2);
+      await expect.poll(() => {
+        return Math.abs((openCalls.at(-1)?.width ?? 0) - Math.round(pane!.getBoundingClientRect().width));
+      }).toBeLessThanOrEqual(1);
+      await expect.poll(() => {
+        return Math.abs((openCalls.at(-1)?.x ?? -1) - Math.round(pane!.getBoundingClientRect().left));
       }).toBeLessThanOrEqual(1);
     } finally {
       await mounted.cleanup();

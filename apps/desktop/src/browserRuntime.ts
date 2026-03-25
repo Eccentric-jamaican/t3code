@@ -234,7 +234,8 @@ const CAPTURE_SELECTION_SCRIPT = String.raw`
 
 const MAX_TEXT_LENGTH = 20_000;
 const WAIT_POLL_INTERVAL_MS = 100;
-const ATTACHED_BOUNDS_REAPPLY_DELAYS_MS = [0, 75] as const;
+const ATTACHED_BOUNDS_REAPPLY_DELAYS_MS = [0, 75, 200, 500] as const;
+const INTEGRATED_BROWSER_VIEWPORT_SELECTOR = '[data-integrated-browser-native-viewport="true"]';
 
 interface BrowserRuntimeRecord {
   projectId: ProjectId;
@@ -263,6 +264,62 @@ function normalizeBounds(bounds: BrowserPaneBounds): BrowserPaneBounds {
     width: Math.max(0, Math.round(bounds.width)),
     height: Math.max(0, Math.round(bounds.height)),
   };
+}
+
+async function readIntegratedBrowserViewportBounds(
+  window: BrowserWindow | null,
+): Promise<BrowserPaneBounds | null> {
+  if (!window) {
+    return null;
+  }
+
+  try {
+    const result = await window.webContents.executeJavaScript(
+      `(() => {
+        const element = document.querySelector(${JSON.stringify(INTEGRATED_BROWSER_VIEWPORT_SELECTOR)});
+        if (!(element instanceof HTMLElement)) {
+          return null;
+        }
+
+        const rect = element.getBoundingClientRect();
+        if (!(rect.width > 0 && rect.height > 0)) {
+          return null;
+        }
+
+        return {
+          x: rect.left,
+          y: rect.top,
+          width: rect.width,
+          height: rect.height,
+        };
+      })()`,
+      true,
+    );
+
+    if (
+      !result ||
+      typeof result !== "object" ||
+      !("x" in result) ||
+      !("y" in result) ||
+      !("width" in result) ||
+      !("height" in result)
+    ) {
+      return null;
+    }
+
+    const candidate = result as Record<string, unknown>;
+    const x = Number(candidate.x);
+    const y = Number(candidate.y);
+    const width = Number(candidate.width);
+    const height = Number(candidate.height);
+    if (![x, y, width, height].every(Number.isFinite)) {
+      return null;
+    }
+
+    return normalizeBounds({ x, y, width, height });
+  } catch {
+    return null;
+  }
 }
 
 function toSummary(runtime: BrowserRuntimeRecord): BrowserSessionSummary {
@@ -333,6 +390,7 @@ export class BrowserRuntimeRegistry extends EventEmitter<{
   private paneOpen = false;
   private paneProjectId: ProjectId | null = null;
   private paneBounds: BrowserPaneBounds | null = null;
+  private paneRequestVersion = 0;
 
   constructor(options: BrowserRuntimeRegistryOptions) {
     super();
@@ -384,10 +442,31 @@ export class BrowserRuntimeRegistry extends EventEmitter<{
   }
 
   async open(projectId: ProjectId, bounds: BrowserPaneBounds): Promise<BrowserSessionSnapshot> {
+    const requestVersion = ++this.paneRequestVersion;
     this.paneOpen = true;
     this.paneProjectId = projectId;
     this.paneBounds = normalizeBounds(bounds);
     await this.ensureRuntime(projectId);
+    if (
+      requestVersion !== this.paneRequestVersion ||
+      !this.paneOpen ||
+      this.paneProjectId !== projectId ||
+      !this.paneBounds
+    ) {
+      return this.snapshotForProject(projectId);
+    }
+    const measuredBounds = await readIntegratedBrowserViewportBounds(this.window);
+    if (
+      requestVersion !== this.paneRequestVersion ||
+      !this.paneOpen ||
+      this.paneProjectId !== projectId ||
+      !this.paneBounds
+    ) {
+      return this.snapshotForProject(projectId);
+    }
+    if (measuredBounds) {
+      this.paneBounds = measuredBounds;
+    }
     if (this.window) {
       this.attachProject(this.window, projectId, this.paneBounds);
     }
@@ -396,6 +475,7 @@ export class BrowserRuntimeRegistry extends EventEmitter<{
   }
 
   async closePane(): Promise<void> {
+    this.paneRequestVersion += 1;
     this.paneOpen = false;
     this.paneBounds = null;
     if (this.window) {
@@ -833,12 +913,13 @@ export class BrowserRuntimeRegistry extends EventEmitter<{
   private scheduleAttachedBoundsReapply(projectId: ProjectId): void {
     for (const delayMs of ATTACHED_BOUNDS_REAPPLY_DELAYS_MS) {
       globalThis.setTimeout(() => {
-        this.reapplyAttachedBounds(projectId);
+        void this.reapplyAttachedBounds(projectId);
       }, delayMs);
     }
   }
 
-  private reapplyAttachedBounds(projectId: ProjectId): void {
+  private async reapplyAttachedBounds(projectId: ProjectId): Promise<void> {
+    const requestVersion = this.paneRequestVersion;
     if (
       !this.window ||
       !this.paneOpen ||
@@ -851,6 +932,20 @@ export class BrowserRuntimeRegistry extends EventEmitter<{
     const runtime = this.runtimes.get(projectId);
     if (!runtime) {
       return;
+    }
+    const measuredBounds = await readIntegratedBrowserViewportBounds(this.window);
+    if (
+      requestVersion !== this.paneRequestVersion ||
+      !this.window ||
+      !this.paneOpen ||
+      !this.paneBounds ||
+      this.paneProjectId !== projectId ||
+      this.attachedProjectId !== projectId
+    ) {
+      return;
+    }
+    if (measuredBounds) {
+      this.paneBounds = measuredBounds;
     }
     this.applyBounds(runtime, this.paneBounds, { forceViewportRefresh: true });
   }

@@ -303,4 +303,157 @@ describe("BrowserRuntimeRegistry", () => {
     });
     expect(runtime!.view.webContents.setZoomFactorCalls).toHaveLength(0);
   });
+
+  it("applies requested pane bounds directly to the native view", async () => {
+    const registry = new BrowserRuntimeRegistry({ browserPreloadPath: "test-preload.js" });
+    const window = {
+      contentView: {
+        addChildView: vi.fn(),
+        removeChildView: vi.fn(),
+      },
+    };
+    const projectId = ProjectId.makeUnsafe("project-6");
+
+    registry.setWindow(window as never);
+    const snapshot = await registry.open(projectId, { x: 500, y: 35, width: 200, height: 360 });
+    vi.runAllTimers();
+
+    const runtime = ((registry as any).runtimes as Map<
+      ProjectId,
+      {
+        view: {
+          setBoundsCalls: Array<{ x: number; y: number; width: number; height: number }>;
+        };
+      }
+    >).get(projectId);
+
+    expect(snapshot.paneBounds).toEqual({ x: 500, y: 35, width: 200, height: 360 });
+    expect(runtime!.view.setBoundsCalls.at(-1)).toEqual({
+      x: 500,
+      y: 35,
+      width: 200,
+      height: 360,
+    });
+
+    await registry.open(projectId, { x: 580, y: 35, width: 200, height: 360 });
+    vi.runAllTimers();
+
+    expect(runtime!.view.setBoundsCalls.at(-1)).toEqual({
+      x: 580,
+      y: 35,
+      width: 200,
+      height: 360,
+    });
+  });
+
+  it("keeps the latest pane bounds when open requests resolve out of order", async () => {
+    const registry = new BrowserRuntimeRegistry({ browserPreloadPath: "test-preload.js" });
+    const window = {
+      contentView: {
+        addChildView: vi.fn(),
+        removeChildView: vi.fn(),
+      },
+    };
+    const projectId = ProjectId.makeUnsafe("project-7");
+
+    registry.setWindow(window as never);
+    await registry.ensure(projectId);
+
+    const runtime = ((registry as any).runtimes as Map<
+      ProjectId,
+      {
+        view: {
+          setBoundsCalls: Array<{ x: number; y: number; width: number; height: number }>;
+        };
+      }
+    >).get(projectId);
+
+    expect(runtime).toBeDefined();
+
+    let resolveFirstOpen: () => void = () => undefined;
+    const firstOpenGate = new Promise<void>((resolve) => {
+      resolveFirstOpen = () => resolve();
+    });
+    const originalEnsureRuntime = (registry as any).ensureRuntime.bind(registry) as (
+      projectId: ProjectId,
+    ) => Promise<unknown>;
+    let ensureInvocationCount = 0;
+
+    (registry as any).ensureRuntime = vi.fn(async (nextProjectId: ProjectId) => {
+      ensureInvocationCount += 1;
+      if (ensureInvocationCount === 1) {
+        await firstOpenGate;
+      }
+      return originalEnsureRuntime(nextProjectId);
+    });
+
+    const staleOpen = registry.open(projectId, { x: 540, y: 35, width: 200, height: 360 });
+    await Promise.resolve();
+    const latestSnapshot = await registry.open(projectId, { x: 420, y: 35, width: 260, height: 360 });
+    resolveFirstOpen();
+    await staleOpen;
+    vi.runAllTimers();
+
+    expect(latestSnapshot.paneBounds).toEqual({ x: 420, y: 35, width: 260, height: 360 });
+    expect(runtime!.view.setBoundsCalls.at(-1)).toEqual({
+      x: 420,
+      y: 35,
+      width: 260,
+      height: 360,
+    });
+  });
+
+  it("ignores async viewport measurements after the pane closes", async () => {
+    const registry = new BrowserRuntimeRegistry({ browserPreloadPath: "test-preload.js" });
+    let resolveViewportMeasurement: (value: {
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+    } | null) => void = () => undefined;
+    const viewportMeasurementGate = new Promise<{
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+    } | null>((resolve) => {
+      resolveViewportMeasurement = resolve;
+    });
+    const window = {
+      contentView: {
+        addChildView: vi.fn(),
+        removeChildView: vi.fn(),
+      },
+      webContents: {
+        executeJavaScript: vi.fn(() => viewportMeasurementGate),
+      },
+    };
+    const projectId = ProjectId.makeUnsafe("project-8");
+
+    registry.setWindow(window as never);
+    const openPromise = registry.open(projectId, { x: 10, y: 20, width: 320, height: 240 });
+    await Promise.resolve();
+
+    await registry.closePane();
+    resolveViewportMeasurement({ x: 25, y: 35, width: 480, height: 360 });
+
+    await openPromise;
+    vi.runAllTimers();
+    await Promise.resolve();
+
+    const runtime = ((registry as any).runtimes as Map<
+      ProjectId,
+      {
+        view: {
+          setBoundsCalls: Array<{ x: number; y: number; width: number; height: number }>;
+        };
+      }
+    >).get(projectId);
+
+    expect(runtime).toBeDefined();
+    expect(runtime!.view.setBoundsCalls).toHaveLength(0);
+    expect((registry as any).paneOpen).toBe(false);
+    expect((registry as any).paneBounds).toBeNull();
+    expect((registry as any).attachedProjectId).toBeNull();
+  });
 });
