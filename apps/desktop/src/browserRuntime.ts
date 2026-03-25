@@ -322,6 +322,18 @@ async function readIntegratedBrowserViewportBounds(
   }
 }
 
+function scaleBoundsByZoomFactor(bounds: BrowserPaneBounds, zoomFactor: number): BrowserPaneBounds {
+  if (!Number.isFinite(zoomFactor) || Math.abs(zoomFactor - 1) < 0.001) {
+    return normalizeBounds(bounds);
+  }
+  return normalizeBounds({
+    x: bounds.x * zoomFactor,
+    y: bounds.y * zoomFactor,
+    width: bounds.width * zoomFactor,
+    height: bounds.height * zoomFactor,
+  });
+}
+
 function toSummary(runtime: BrowserRuntimeRecord): BrowserSessionSummary {
   return {
     sessionId: runtime.sessionId,
@@ -859,7 +871,12 @@ export class BrowserRuntimeRegistry extends EventEmitter<{
     bounds: BrowserPaneBounds,
     options: { forceViewportRefresh?: boolean } = {},
   ): void {
-    const nextBounds = normalizeBounds(bounds);
+    const hostWindowWebContents = this.window?.webContents;
+    const hostZoomFactor =
+      hostWindowWebContents && typeof hostWindowWebContents.getZoomFactor === "function"
+        ? hostWindowWebContents.getZoomFactor()
+        : 1;
+    const nextBounds = scaleBoundsByZoomFactor(bounds, hostZoomFactor);
     const shouldShow = nextBounds.width > 0 && nextBounds.height > 0;
 
     if (options.forceViewportRefresh && shouldShow) {

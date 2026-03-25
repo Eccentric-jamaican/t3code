@@ -346,6 +346,42 @@ describe("BrowserRuntimeRegistry", () => {
     });
   });
 
+  it("scales renderer pane bounds by the host zoom factor before applying native bounds", async () => {
+    const registry = new BrowserRuntimeRegistry({ browserPreloadPath: "test-preload.js" });
+    const window = {
+      contentView: {
+        addChildView: vi.fn(),
+        removeChildView: vi.fn(),
+      },
+      webContents: {
+        getZoomFactor: vi.fn(() => 0.8),
+        executeJavaScript: vi.fn(async () => null),
+      },
+    };
+    const projectId = ProjectId.makeUnsafe("project-6b");
+
+    registry.setWindow(window as never);
+    await registry.open(projectId, { x: 500, y: 35, width: 200, height: 360 });
+    vi.runAllTimers();
+
+    const runtime = ((registry as any).runtimes as Map<
+      ProjectId,
+      {
+        view: {
+          setBoundsCalls: Array<{ x: number; y: number; width: number; height: number }>;
+        };
+      }
+    >).get(projectId);
+
+    expect(runtime).toBeDefined();
+    expect(runtime!.view.setBoundsCalls.at(-1)).toEqual({
+      x: 400,
+      y: 28,
+      width: 160,
+      height: 288,
+    });
+  });
+
   it("keeps the latest pane bounds when open requests resolve out of order", async () => {
     const registry = new BrowserRuntimeRegistry({ browserPreloadPath: "test-preload.js" });
     const window = {
