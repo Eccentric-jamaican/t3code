@@ -1243,7 +1243,10 @@ export default function OrchestrateRouteView({
           <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
             <ScrollArea className="min-h-0 min-w-0 flex-1" scrollbarGutter>
               {resolvedView === "board" ? (
-                <div className="grid min-h-full auto-cols-[minmax(18rem,22rem)] grid-flow-col gap-3 px-3 py-3 sm:px-4 sm:py-4">
+                <div
+                  className="grid min-h-full min-w-full auto-cols-[minmax(18rem,1fr)] grid-flow-col gap-3 px-3 py-3 sm:px-4 sm:py-4"
+                  data-testid="orchestrate-board-grid"
+                >
                   {visibleStates.map((state) => {
                     const columnTasks = tasksByState.get(state) ?? [];
                     return (

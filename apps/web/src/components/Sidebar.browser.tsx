@@ -535,6 +535,21 @@ function elementHeightByTestId(testId: string): number {
   return Math.round(element!.getBoundingClientRect().height);
 }
 
+function viewportRightGapByTestId(testId: string): number {
+  const element = document.querySelector<HTMLElement>(`[data-testid='${testId}']`);
+  expect(element).not.toBeNull();
+  return Math.round(window.innerWidth - element!.getBoundingClientRect().right);
+}
+
+function scrollViewportRightGapByTestId(testId: string): number {
+  const element = document.querySelector<HTMLElement>(`[data-testid='${testId}']`);
+  expect(element).not.toBeNull();
+  const viewport = element!.closest<HTMLElement>("[data-slot='scroll-area-viewport']");
+  expect(viewport).not.toBeNull();
+
+  return Math.round(viewport!.getBoundingClientRect().right - element!.getBoundingClientRect().right);
+}
+
 function createDesktopBrowserSnapshot(projectId: ProjectId): BrowserSessionSnapshot {
   return {
     paneOpen: true,
@@ -987,9 +1002,11 @@ describe("Sidebar browser", () => {
 
     await expect.element(page.getByTestId("integrated-browser-header-actions")).toBeVisible();
     await expect.element(page.getByTestId("diff-panel-header-actions")).toBeVisible();
+    await expect.element(page.getByTestId("integrated-browser-pane")).toBeVisible();
     await expect.poll(() => desktopTitlebarBandMetrics().bandHeight).toBe(22);
     await expect.poll(() => elementHeightByTestId("integrated-browser-top-header")).toBe(40);
     await expect.poll(() => elementHeightByTestId("diff-panel-top-header")).toBe(40);
+    await expect.poll(() => viewportRightGapByTestId("integrated-browser-pane")).toBe(0);
 
     await expect
       .poll(
@@ -1019,6 +1036,15 @@ describe("Sidebar browser", () => {
       .toBeGreaterThanOrEqual(0);
     await expect.poll(() => desktopInsetShellMetrics().paddingLeft).toBe("0px");
     expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth + 1);
+
+    await mounted.cleanup();
+  });
+
+  it("stretches the orchestrate board to the scroll viewport when only a few columns are visible", async () => {
+    const mounted = await mountSidebarApp({ initialEntries: ["/orchestrate"] });
+
+    await expect.element(page.getByTestId("orchestrate-board-grid")).toBeVisible();
+    await expect.poll(() => scrollViewportRightGapByTestId("orchestrate-board-grid")).toBe(0);
 
     await mounted.cleanup();
   });

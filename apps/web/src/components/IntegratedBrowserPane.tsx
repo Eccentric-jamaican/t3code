@@ -324,10 +324,8 @@ export default function IntegratedBrowserPane(props: BrowserPaneProps) {
     <aside
       ref={paneRef}
       className="relative flex h-full min-w-[320px] shrink-0 border-l border-border bg-background"
-      style={{
-        width,
-        right: "var(--app-desktop-top-edge-action-keepout-width)",
-      }}
+      data-testid="integrated-browser-pane"
+      style={{ width }}
     >
       <div
         className="absolute inset-y-0 left-0 z-20 w-1 cursor-col-resize"
