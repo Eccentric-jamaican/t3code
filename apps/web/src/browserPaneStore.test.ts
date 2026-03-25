@@ -67,7 +67,14 @@ describe("browserPaneStore", () => {
 
     expect(JSON.parse(getTestWindow().localStorage.getItem(STORAGE_KEY) ?? "{}")).toEqual({
       open: true,
-      width: 320,
+      width: 480,
     });
+  });
+
+  it("defaults to the widened pane width", async () => {
+    const { useBrowserPaneStore } = await import("./browserPaneStore");
+
+    expect(useBrowserPaneStore.getState().open).toBe(false);
+    expect(useBrowserPaneStore.getState().width).toBe(480);
   });
 });

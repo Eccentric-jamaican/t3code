@@ -557,7 +557,7 @@ function createDesktopBrowserSnapshot(projectId: ProjectId): BrowserSessionSnaps
     paneBounds: {
       x: 1_020,
       y: 22,
-      width: 420,
+      width: 480,
       height: 760,
     },
     session: {
@@ -692,6 +692,7 @@ async function mountSidebarApp(
     | {
         configureFixture?: (fixture: TestFixture) => void;
         initialEntries?: string[];
+        viewport?: { width: number; height: number };
       }
     | string[] = {},
 ) {
@@ -715,16 +716,20 @@ async function mountSidebarApp(
     }),
   );
 
-  await render(<RouterProvider router={router} />, {
+  const screen = await render(<RouterProvider router={router} />, {
     container: host,
   });
 
-  await page.viewport(1440, 960);
+  await page.viewport(
+    resolvedOptions.viewport?.width ?? 1440,
+    resolvedOptions.viewport?.height ?? 960,
+  );
   await waitForLayout();
   await waitForProductionStyles();
 
   return {
     cleanup: async () => {
+      await screen.unmount();
       if (host.isConnected) {
         host.remove();
       }
@@ -775,7 +780,7 @@ beforeEach(() => {
   });
   useBrowserPaneStore.setState({
     open: false,
-    width: 420,
+    width: 480,
   });
 });
 
@@ -993,11 +998,15 @@ describe("Sidebar browser", () => {
     } as DesktopBridge;
     useBrowserPaneStore.setState({
       open: true,
-      width: 420,
+      width: 480,
     });
 
     const mounted = await mountSidebarApp({
       initialEntries: [`/${THREAD_ID}?diff=1`],
+      viewport: {
+        width: 1680,
+        height: 960,
+      },
     });
 
     await expect.element(page.getByTestId("integrated-browser-header-actions")).toBeVisible();

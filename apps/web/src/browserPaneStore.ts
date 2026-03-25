@@ -1,8 +1,8 @@
 import { create } from "zustand";
 
 const STORAGE_KEY = "t3code:browser-pane:v1";
-const DEFAULT_WIDTH = 420;
-const MIN_WIDTH = 320;
+const DEFAULT_WIDTH = 480;
+const MIN_WIDTH = 480;
 const MAX_WIDTH = 900;
 
 interface BrowserPanePersistedState {

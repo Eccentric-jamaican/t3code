@@ -30,6 +30,7 @@ vi.mock("electron", () => {
     title = "";
     loading = false;
     zoomFactor = 1;
+    setZoomFactorCalls: number[] = [];
     ownerView: MockWebContentsView | null = null;
     readonly navigationHistory = {
       canGoBack: () => false,
@@ -61,17 +62,7 @@ vi.mock("electron", () => {
       return this.loading;
     }
 
-    async executeJavaScript(code: string): Promise<unknown> {
-      if (code.includes("window.innerWidth")) {
-        const bounds = this.ownerView?.getBounds() ?? { width: 0 };
-        const viewportWidth =
-          bounds.width * (this.ownerView?.viewportMismatchFactor ?? 1) / this.zoomFactor;
-        return {
-          innerWidth: viewportWidth,
-          visualViewportWidth: viewportWidth,
-          devicePixelRatio: this.zoomFactor,
-        };
-      }
+    async executeJavaScript(): Promise<unknown> {
       return null;
     }
 
@@ -93,6 +84,7 @@ vi.mock("electron", () => {
 
     setZoomFactor(factor: number): void {
       this.zoomFactor = factor;
+      this.setZoomFactorCalls.push(factor);
     }
   }
 
@@ -100,7 +92,6 @@ vi.mock("electron", () => {
     readonly webContents = new MockWebContents();
     readonly setBoundsCalls: Array<{ x: number; y: number; width: number; height: number }> = [];
     readonly setVisibleCalls: boolean[] = [];
-    viewportMismatchFactor = 1;
     private bounds = { x: 0, y: 0, width: 0, height: 0 };
 
     constructor() {
@@ -263,33 +254,53 @@ describe("BrowserRuntimeRegistry", () => {
     });
   });
 
-  it("reconciles the embedded viewport width when the page renders too wide", async () => {
+  it("detaches the pane without discarding the runtime and reapplies exact bounds on reopen", async () => {
     const registry = new BrowserRuntimeRegistry({ browserPreloadPath: "test-preload.js" });
+    const addChildView = vi.fn();
+    const removeChildView = vi.fn();
     const window = {
       contentView: {
-        addChildView: vi.fn(),
-        removeChildView: vi.fn(),
+        addChildView,
+        removeChildView,
       },
     };
     const projectId = ProjectId.makeUnsafe("project-5");
 
     registry.setWindow(window as never);
     await registry.open(projectId, { x: 10, y: 20, width: 420, height: 320 });
+    vi.runAllTimers();
 
     const runtime = ((registry as any).runtimes as Map<
       ProjectId,
       {
         view: {
-          viewportMismatchFactor: number;
-          webContents: { getZoomFactor: () => number };
+          setBoundsCalls: Array<{ x: number; y: number; width: number; height: number }>;
+          webContents: { setZoomFactorCalls: number[] };
         };
       }
     >).get(projectId);
 
     expect(runtime).toBeDefined();
-    runtime!.view.viewportMismatchFactor = 1.5;
-    await (registry as any).syncViewportToPane(projectId);
+    await registry.closePane();
+    expect(removeChildView).toHaveBeenCalledWith(runtime!.view);
+    expect((registry as any).attachedProjectId).toBeNull();
+    expect((registry as any).paneOpen).toBe(false);
+    expect((registry as any).paneBounds).toBeNull();
+    expect(((registry as any).runtimes as Map<ProjectId, unknown>).has(projectId)).toBe(true);
 
-    expect(runtime!.view.webContents.getZoomFactor()).toBeCloseTo(1.5, 5);
+    const reopened = await registry.open(projectId, { x: 25, y: 35, width: 480, height: 360 });
+    vi.runAllTimers();
+
+    expect(reopened.paneOpen).toBe(true);
+    expect(reopened.paneProjectId).toBe(projectId);
+    expect(reopened.paneBounds).toEqual({ x: 25, y: 35, width: 480, height: 360 });
+    expect(addChildView).toHaveBeenCalledTimes(2);
+    expect(runtime!.view.setBoundsCalls.at(-1)).toEqual({
+      x: 25,
+      y: 35,
+      width: 480,
+      height: 360,
+    });
+    expect(runtime!.view.webContents.setZoomFactorCalls).toHaveLength(0);
   });
 });

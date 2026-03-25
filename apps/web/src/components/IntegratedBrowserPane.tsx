@@ -14,6 +14,7 @@ import {
   XIcon,
 } from "lucide-react";
 import {
+  type CSSProperties,
   type KeyboardEvent,
   type PointerEvent as ReactPointerEvent,
   useCallback,
@@ -23,7 +24,7 @@ import {
   useState,
 } from "react";
 
-import { useBrowserPaneStore } from "~/browserPaneStore";
+import { BROWSER_PANE_MIN_WIDTH, useBrowserPaneStore } from "~/browserPaneStore";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { toastManager } from "~/components/ui/toast";
@@ -199,6 +200,7 @@ export default function IntegratedBrowserPane(props: BrowserPaneProps) {
   useEffect(() => {
     if (!api?.browser || !activeProjectId) {
       setSnapshot(null);
+      setUrlInput("");
       return;
     }
     void api.browser
@@ -213,6 +215,16 @@ export default function IntegratedBrowserPane(props: BrowserPaneProps) {
     const nextUrl = session?.navigation.url ?? "";
     setUrlInput(nextUrl);
   }, [session?.navigation.url]);
+
+  useEffect(
+    () => () => {
+      if (!api?.browser) {
+        return;
+      }
+      void api.browser.closePane().catch(() => undefined);
+    },
+    [api],
+  );
 
   useLayoutEffect(() => {
     if (!open || !api?.browser || !activeProjectId || !viewportRef.current) {
@@ -323,9 +335,14 @@ export default function IntegratedBrowserPane(props: BrowserPaneProps) {
   return (
     <aside
       ref={paneRef}
-      className="relative flex h-full min-w-[320px] shrink-0 border-l border-border bg-background"
+      className="relative flex h-full shrink-0 border-l border-border bg-background"
       data-testid="integrated-browser-pane"
-      style={{ width }}
+      style={
+        {
+          width,
+          minWidth: BROWSER_PANE_MIN_WIDTH,
+        } as CSSProperties
+      }
     >
       <div
         className="absolute inset-y-0 left-0 z-20 w-1 cursor-col-resize"
@@ -404,7 +421,7 @@ export default function IntegratedBrowserPane(props: BrowserPaneProps) {
               value={urlInput}
               onChange={(event) => setUrlInput(event.target.value)}
               onKeyDown={onUrlKeyDown}
-              className="h-8 min-w-0 flex-1 rounded-md border-border bg-muted/40 text-xs"
+              className="h-8 min-w-[160px] flex-1 basis-0 rounded-md border-border bg-muted/40 text-xs"
               spellCheck={false}
               aria-label="Browser URL"
             />

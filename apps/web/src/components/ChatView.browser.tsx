@@ -105,6 +105,7 @@ interface UserRowMeasurement {
 interface MountedChatView {
   cleanup: () => Promise<void>;
   measureUserRow: (targetMessageId: MessageId) => Promise<UserRowMeasurement>;
+  navigate: (path: string) => Promise<void>;
   setViewport: (viewport: ViewportSpec) => Promise<void>;
 }
 
@@ -793,6 +794,12 @@ function elementHeightByTestId(testId: string): number {
   return Math.round(element!.getBoundingClientRect().height);
 }
 
+function elementWidthBySelector(selector: string): number {
+  const element = document.querySelector<HTMLElement>(selector);
+  expect(element).not.toBeNull();
+  return Math.round(element!.getBoundingClientRect().width);
+}
+
 function createDesktopBrowserSnapshot(projectId: ProjectId): BrowserSessionSnapshot {
   return {
     paneOpen: true,
@@ -800,7 +807,7 @@ function createDesktopBrowserSnapshot(projectId: ProjectId): BrowserSessionSnaps
     paneBounds: {
       x: 980,
       y: 22,
-      width: 420,
+      width: 480,
       height: 860,
     },
     session: {
@@ -822,7 +829,10 @@ function createDesktopBrowserSnapshot(projectId: ProjectId): BrowserSessionSnaps
   };
 }
 
-function createDesktopBrowserBridge(projectId: ProjectId): DesktopBridge["browser"] {
+function createDesktopBrowserBridge(
+  projectId: ProjectId,
+  overrides: Partial<DesktopBridge["browser"]> = {},
+): DesktopBridge["browser"] {
   return {
     getState: async () => createDesktopBrowserSnapshot(projectId),
     open: async () => createDesktopBrowserSnapshot(projectId),
@@ -850,6 +860,7 @@ function createDesktopBrowserBridge(projectId: ProjectId): DesktopBridge["browse
     }),
     captureInspectSelection: async () => null,
     onEvent: () => () => {},
+    ...overrides,
   };
 }
 
@@ -997,6 +1008,7 @@ async function mountChatView(options: {
   viewport: ViewportSpec;
   snapshot: OrchestrationReadModel;
   configureFixture?: (fixture: TestFixture) => void;
+  initialEntries?: string[];
 }): Promise<MountedChatView> {
   fixture = buildFixture(options.snapshot);
   options.configureFixture?.(fixture);
@@ -1015,7 +1027,7 @@ async function mountChatView(options: {
 
   const router = getRouter(
     createMemoryHistory({
-      initialEntries: [`/${THREAD_ID}`],
+      initialEntries: options.initialEntries ?? [`/${THREAD_ID}`],
     }),
   );
 
@@ -1031,6 +1043,10 @@ async function mountChatView(options: {
       host.remove();
     },
     measureUserRow: async (targetMessageId: MessageId) => measureUserRow({ host, targetMessageId }),
+    navigate: async (path: string) => {
+      await router.navigate({ to: path });
+      await waitForLayout();
+    },
     setViewport: async (viewport: ViewportSpec) => {
       await setViewport(viewport);
       await waitForProductionStyles();
@@ -1101,7 +1117,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     });
     useBrowserPaneStore.setState({
       open: false,
-      width: 420,
+      width: 480,
     });
     useStore.setState({
       projects: [],
@@ -1213,14 +1229,14 @@ describe("ChatView timeline estimator parity (full app)", () => {
     } as DesktopBridge;
     useBrowserPaneStore.setState({
       open: true,
-      width: 420,
+      width: 480,
     });
 
     const mounted = await mountChatView({
       viewport: {
         ...DEFAULT_VIEWPORT,
         name: "desktop-wide",
-        width: 1440,
+        width: 1680,
         height: 960,
       },
       snapshot: createSnapshotForTargetUser({
@@ -1278,6 +1294,110 @@ describe("ChatView timeline estimator parity (full app)", () => {
         desktopCaptionButtonLaneMetrics("diff-panel-header-actions").targetRight,
       );
       expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth + 1);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("closes the native pane off-thread and restores it when returning to chat", async () => {
+    const closePane = vi.fn(async () => undefined);
+    window.desktopBridge = {
+      ...window.desktopBridge,
+      browser: createDesktopBrowserBridge(PROJECT_ID, { closePane }),
+    } as DesktopBridge;
+    useBrowserPaneStore.setState({
+      open: true,
+      width: 480,
+    });
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-browser-route-scope" as MessageId,
+        targetText: "route scope",
+      }),
+    });
+
+    try {
+      await expect
+        .poll(
+          () =>
+            document.querySelector<HTMLElement>("[data-testid='integrated-browser-pane']") ?? null,
+        )
+        .not.toBeNull();
+
+      await mounted.navigate("/orchestrate");
+
+      await expect
+        .poll(
+          () =>
+            document.querySelector<HTMLElement>("[data-testid='integrated-browser-pane']") ?? null,
+        )
+        .toBeNull();
+      await vi.waitFor(() => {
+        expect(closePane).toHaveBeenCalled();
+      });
+
+      await mounted.navigate(`/${THREAD_ID}`);
+
+      await expect
+        .poll(
+          () =>
+            document.querySelector<HTMLElement>("[data-testid='integrated-browser-pane']") ?? null,
+        )
+        .not.toBeNull();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps the browser toolbar usable at the widened minimum width", async () => {
+    window.desktopBridge = {
+      ...window.desktopBridge,
+      browser: createDesktopBrowserBridge(PROJECT_ID),
+    } as DesktopBridge;
+    useBrowserPaneStore.setState({
+      open: true,
+      width: 480,
+    });
+
+    const mounted = await mountChatView({
+      viewport: {
+        ...DEFAULT_VIEWPORT,
+        name: "desktop-browser-min-width",
+        width: 1440,
+        height: 960,
+      },
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-browser-toolbar-min-width" as MessageId,
+        targetText: "toolbar width",
+      }),
+    });
+
+    try {
+      await expect
+        .poll(
+          () =>
+            document.querySelector<HTMLElement>("[data-testid='integrated-browser-top-header']") ??
+            null,
+        )
+        .not.toBeNull();
+      await expect.element(page.getByLabelText("Back")).toBeVisible();
+      await expect.element(page.getByLabelText("Forward")).toBeVisible();
+      await expect.element(page.getByLabelText("Reload")).toBeVisible();
+      await expect.element(page.getByLabelText("Browser URL")).toBeVisible();
+      await expect.element(page.getByLabelText("Inspect element")).toBeVisible();
+      await expect.element(page.getByLabelText("Kill browser")).toBeVisible();
+      await expect.element(page.getByLabelText("Collapse browser")).toBeVisible();
+      await expect.poll(() => elementHeightByTestId("integrated-browser-top-header")).toBe(40);
+      await expect.poll(() => elementWidthBySelector("input[aria-label='Browser URL']")).toBeGreaterThanOrEqual(150);
+      await expect.poll(() => {
+        const header = document.querySelector<HTMLElement>(
+          "[data-testid='integrated-browser-top-header']",
+        );
+        expect(header).not.toBeNull();
+        return header!.scrollWidth - header!.clientWidth;
+      }).toBeLessThanOrEqual(1);
     } finally {
       await mounted.cleanup();
     }

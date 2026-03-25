@@ -1,9 +1,10 @@
-import { ThreadId } from "@t3tools/contracts";
+import { ThreadId, type ProjectId, type RuntimeMode } from "@t3tools/contracts";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { Suspense, lazy, type ReactNode, useCallback, useEffect } from "react";
 
 import AppPageShell from "../components/AppPageShell";
 import ChatView from "../components/ChatView";
+import IntegratedBrowserPane from "../components/IntegratedBrowserPane";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { parseDiffRouteSearch } from "../diffRouteSearch";
 import { useMediaQuery } from "../hooks/useMediaQuery";
@@ -16,6 +17,22 @@ const DIFF_INLINE_LAYOUT_MEDIA_QUERY = "(max-width: 1180px)";
 const DIFF_INLINE_SIDEBAR_WIDTH_STORAGE_KEY = "chat_diff_sidebar_width";
 const DIFF_INLINE_DEFAULT_WIDTH = "clamp(28rem,48vw,44rem)";
 const DIFF_INLINE_SIDEBAR_MIN_WIDTH = 26 * 16;
+
+function resolveThreadBrowserContext(input: {
+  threadId: ThreadId;
+  threads: ReturnType<typeof useStore.getState>["threads"];
+  draftThreadsByThreadId: ReturnType<typeof useComposerDraftStore.getState>["draftThreadsByThreadId"];
+}): {
+  projectId: ProjectId | null;
+  runtimeMode: RuntimeMode | null;
+} {
+  const activeThread = input.threads.find((thread) => thread.id === input.threadId) ?? null;
+  const activeDraftThread = input.draftThreadsByThreadId[input.threadId] ?? null;
+  return {
+    projectId: activeThread?.projectId ?? activeDraftThread?.projectId ?? null,
+    runtimeMode: activeThread?.runtimeMode ?? activeDraftThread?.runtimeMode ?? null,
+  };
+}
 
 const DiffPanelSheet = (props: {
   children: ReactNode;
@@ -144,6 +161,13 @@ function ChatThreadRouteView() {
   const draftThreadExists = useComposerDraftStore(
     (store) => Object.hasOwn(store.draftThreadsByThreadId, threadId),
   );
+  const threads = useStore((store) => store.threads);
+  const draftThreadsByThreadId = useComposerDraftStore((store) => store.draftThreadsByThreadId);
+  const threadBrowserContext = resolveThreadBrowserContext({
+    threadId,
+    threads,
+    draftThreadsByThreadId,
+  });
   const routeThreadExists = threadExists || draftThreadExists;
   const diffOpen = search.diff === "1";
   const shouldUseDiffSheet = useMediaQuery(DIFF_INLINE_LAYOUT_MEDIA_QUERY);
@@ -192,6 +216,11 @@ function ChatThreadRouteView() {
             onCloseDiff={closeDiff}
             onOpenDiff={openDiff}
           />
+          <IntegratedBrowserPane
+            activeProjectId={threadBrowserContext.projectId}
+            activeThreadId={threadId}
+            activeRuntimeMode={threadBrowserContext.runtimeMode}
+          />
         </div>
       </AppPageShell>
     );
@@ -201,10 +230,17 @@ function ChatThreadRouteView() {
     <>
       <AppPageShell className="min-w-0 text-foreground isolate">
         <div
-          className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--app-thread-surface)] text-foreground md:rounded-[12px]"
+          className="flex min-h-0 min-w-0 flex-1 overflow-hidden bg-[var(--app-thread-surface)] text-foreground md:rounded-[12px]"
           data-testid="chat-thread-shell"
         >
-          <ChatView key={threadId} threadId={threadId} />
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+            <ChatView key={threadId} threadId={threadId} />
+          </div>
+          <IntegratedBrowserPane
+            activeProjectId={threadBrowserContext.projectId}
+            activeThreadId={threadId}
+            activeRuntimeMode={threadBrowserContext.runtimeMode}
+          />
         </div>
       </AppPageShell>
       <DiffPanelSheet diffOpen={diffOpen} onCloseDiff={closeDiff}>
