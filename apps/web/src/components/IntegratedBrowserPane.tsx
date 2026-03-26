@@ -57,6 +57,13 @@ function dataUrlToFile(dataUrl: string, name: string): File {
 
 function buildInspectPrompt(capture: BrowserInspectCapture): string {
   const metadata = {
+    source: {
+      kind: "t3_integrated_browser_inspect_capture",
+      appSurface: "desktop-integrated-browser-pane",
+      projectId: capture.projectId,
+      sessionId: capture.sessionId,
+      capturedAt: capture.capturedAt,
+    },
     selector: capture.selector,
     tagName: capture.tagName,
     url: capture.url,
@@ -69,6 +76,9 @@ function buildInspectPrompt(capture: BrowserInspectCapture): string {
     computedStyle: capture.computedStyle,
   };
   return [
+    "[T3_BROWSER_INSPECT_CAPTURE]",
+    "Source: This element/DOM context was captured from the T3 integrated browser pane.",
+    "Provenance: Do not assume this came from external Chrome MCP context.",
     "Use this inspected element as the target for the next edit.",
     "",
     "```json",
